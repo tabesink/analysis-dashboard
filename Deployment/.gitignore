@@ -1,0 +1,8 @@
+# Operator-edited environment file (contains ADMIN_SECRET). Never commit.
+.env
+
+# Build output: image tarballs and packed bundles.
+releases/
+*.tar
+*.tar.gz
+*.tar.gz.sha256

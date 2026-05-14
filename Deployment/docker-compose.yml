@@ -1,0 +1,181 @@
+# RSP Dashboard - LAN production stack (plain HTTP, no reverse proxy).
+#
+# Topology:
+#     browser (LAN) -> client:3000 (Next.js, host port 3000)
+#                   -> server:8000 (FastAPI,  host port 8000)
+#     jwt-init (one-shot) generates JWT_SECRET into a named volume on first up.
+#
+# Operator workflow on the prod host:
+#     1. Place `images.tar` next to this file (produced by `Deployment/build.sh`).
+#     2. `cp .env.example .env` and set `ADMIN_SECRET` (required).
+#     3. `./deploy.sh`            (Linux)
+#        or `.\deploy.ps1`        (Windows / Docker Desktop)
+#
+# Manual equivalent of step 3:
+#     docker load -i images.tar
+#     docker compose --env-file .env up -d
+#
+# This stack is for trusted internal LAN deployments. It serves plain HTTP and
+# sets `ALLOW_INSECURE_COOKIES=true` so the server's production-mode validator
+# permits non-`Secure` cookies. Do NOT expose these ports to the public
+# internet without putting an HTTPS-terminating reverse proxy in front.
+
+name: rsp-dashboard
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-security-baseline: &security-baseline
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  read_only: true
+
+services:
+  # ---------------------------------------------------------------------
+  # One-shot init: generate JWT_SECRET on first up. Idempotent across
+  # restarts because the secret is persisted in a named volume.
+  # ---------------------------------------------------------------------
+  jwt-init:
+    image: alpine:3.20
+    container_name: dashboard-jwt-init
+    restart: "no"
+    user: "0:0"
+    volumes:
+      - jwt:/secrets
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        if [ ! -s /secrets/jwt_secret ]; then
+            head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /secrets/jwt_secret
+            chmod 600 /secrets/jwt_secret
+            chown 1001:1001 /secrets/jwt_secret
+            echo "generated /secrets/jwt_secret"
+        else
+            echo "/secrets/jwt_secret already present, leaving as-is"
+        fi
+    cap_drop: [ALL]
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------
+  # Server (FastAPI + DuckDB)
+  # ---------------------------------------------------------------------
+  server:
+    image: rsp-dashboard-server:${IMAGE_TAG:-1.1.0}
+    container_name: dashboard-server
+    restart: unless-stopped
+    user: "1001:1001"
+    ports:
+      - "${SERVER_PORT:-8000}:8000"
+    volumes:
+      - data:/app/data
+      - logs:/app/logs
+      - jwt:/run/secrets:ro
+    environment:
+      - APP_ENV=production
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+      - DATA_ROOT=/app/data
+      - LOG_DIR=/app/logs
+      - LOG_TO_FILE=true
+      - SLOW_QUERY_MS=${SLOW_QUERY_MS:-1000}
+      # LAN opt-in: lets the server skip the AUTH_COOKIE_SECURE / CORS
+      # wildcard prod-mode validators. Required because we serve plain HTTP.
+      - ALLOW_INSECURE_COOKIES=true
+      - AUTH_COOKIE_SECURE=false
+      - AUTH_COOKIE_SAMESITE=lax
+      - JWT_EXPIRY_HOURS=12
+      # Wildcard CORS is acceptable on a trusted LAN once ALLOW_INSECURE_COOKIES
+      # is set. Tighten if you know the exact LAN origin.
+      - CORS_ORIGINS__0=*
+      # Admin user password - REQUIRED. Set in .env.
+      - ADMIN_SECRET=${ADMIN_SECRET:?ADMIN_SECRET must be set in .env (copy .env.example -> .env and edit)}
+    command:
+      - sh
+      - -c
+      - |
+        export JWT_SECRET="$$(cat /run/secrets/jwt_secret)"
+        exec python -m server
+    depends_on:
+      jwt-init:
+        condition: service_completed_successfully
+    <<: *security-baseline
+    tmpfs:
+      - /tmp:size=128M,mode=1777
+    pids_limit: 512
+    cpus: 4
+    mem_limit: 8g
+    mem_reservation: 2g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready').status==200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+    labels:
+      service: server
+      env: production
+
+  # ---------------------------------------------------------------------
+  # Client (Next.js standalone)
+  # ---------------------------------------------------------------------
+  client:
+    image: rsp-dashboard-client:${IMAGE_TAG:-1.1.0}
+    container_name: dashboard-client
+    restart: unless-stopped
+    user: "1001:1001"
+    ports:
+      - "${CLIENT_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      # NEXT_PUBLIC_API_URL is intentionally unset. The client's
+      # `resolveApiBase()` falls back to `${window.location.protocol}//${window.location.hostname}:${SERVER_PORT}`
+      # at runtime, so a single image works on any LAN host.
+    depends_on:
+      server:
+        condition: service_healthy
+    <<: *security-baseline
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+      - /app/.next/cache:size=128M,mode=1777
+    pids_limit: 200
+    cpus: 1
+    mem_limit: 512m
+    mem_reservation: 256m
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+    labels:
+      service: client
+      env: production
+
+volumes:
+  data:
+  logs:
+  jwt:

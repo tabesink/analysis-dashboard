@@ -1,0 +1,73 @@
+# Client-side Plot Configuration
+# This file contains all plot-related constants for easy management
+
+# Plot dimensions
+plot:
+  width: 2100
+  height: 1200
+
+# Default plot keys for the grid (these come from channel_map)
+# Dictionary mapping plot keys to display titles and axis labels
+default_plot_keys:
+  "bj_xy_force_plot":
+    title: "BJ XY Force"
+    x_label: "X-Component (N)"
+    y_label: "Y-Component (N)"
+  "bj_xz_force_plot":
+    title: "BJ XZ Force"
+    x_label: "X-Component (N)"
+    y_label: "Z-Component (N)"
+  "shock_xy_force_plot":
+    title: "Shock XY Force"
+    x_label: "X-Component (N)"
+    y_label: "Y-Component (N)"
+  "shock_xz_force_plot":
+    title: "Shock XZ Force"
+    x_label: "X-Component (N)"
+    y_label: "Z-Component (N)"
+  "bushing_f_xy_force_plot":
+    title: "Bushing F XY Force"
+    x_label: "X-Component (N)"
+    y_label: "Y-Component (N)"
+  "bushing_f_xz_force_plot":
+    title: "Bushing F XZ Force"
+    x_label: "X-Component (N)"
+    y_label: "Z-Component (N)"
+  "bushing_r_xy_force_plot":
+    title: "Bushing R XY Force"
+    x_label: "X-Component (N)"
+    y_label: "Y-Component (N)"
+  "bushing_r_xz_force_plot":
+    title: "Bushing R XZ Force"
+    x_label: "X-Component (N)"
+    y_label: "Z-Component (N)"
+
+# Opacity settings
+opacity:
+  default_baseline: 0.5
+  new_data: 1.0
+
+# Grid layout options
+grid:
+  column_options: [2, 3, 4]
+  default_columns: 3
+
+# Color palette for grouping (colorblind-friendly)
+color_palette:
+  - "#3b82f6"  # Blue
+  - "#f97316"  # Orange
+  - "#22c55e"  # Green
+  - "#a855f7"  # Purple
+  - "#ef4444"  # Red
+  - "#06b6d4"  # Cyan
+  - "#eab308"  # Yellow
+  - "#ec4899"  # Pink
+
+# Max groups before showing warning
+max_distinct_groups: 8
+
+# Debounce timings (ms)
+debounce:
+  session_save: 500
+  filter: 300
+

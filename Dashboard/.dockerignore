@@ -1,0 +1,60 @@
+# Top-level dockerignore for the Dashboard/ build context.
+#
+# Both the server and client images use Dashboard/ as their build context, so
+# this file applies to both. It excludes generic build/runtime noise; image
+# contents are still controlled by each Dockerfile's COPY instructions.
+
+# Dependency / build outputs
+**/node_modules
+**/.next
+**/out
+**/dist
+**/build
+
+# Python caches and tooling
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.venv
+**/venv
+
+# VCS, CI, IDE
+.git
+.github
+.cursor
+.vscode
+.idea
+.commits
+
+# Logs and runtime data (production volumes mount these instead)
+**/*.log
+logs/
+data/
+
+# Local-dev / docs / tests / notebooks: not needed in any production image
+docs/
+notebooks/
+tests/
+**/coverage
+**/.nyc_output
+
+# Compose overrides and example env files belong to deployment, not images
+docker-compose.override.yml
+docker-compose.override.yml.example
+docker.env.example
+
+# OS noise
+**/.DS_Store
+**/Thumbs.db
+
+# Editor swap files
+**/*.swp
+**/*.swo
+**/*.tsbuildinfo
+
+# Local env files (use Docker env vars / secrets instead)
+**/.env
+**/.env.local
+**/.env.*.local

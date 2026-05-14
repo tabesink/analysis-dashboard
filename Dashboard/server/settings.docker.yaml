@@ -1,0 +1,64 @@
+# RSP Data Analytics Dashboard API - Docker Configuration
+# Used for production Docker deployment
+
+# Runtime mode
+app_env: "production"
+
+# Server settings
+host: "0.0.0.0"
+port: 8000
+debug: false
+log_level: "INFO"
+
+# Security
+cors_origins:
+  #- "http://localhost:3000"
+  #- "http://127.0.0.1:3000"
+  - "http://localhost:3001"
+  - "http://127.0.0.1:3001"
+  - "http://localhost:3002"
+  - "http://127.0.0.1:3002"
+
+# Storage paths (Docker volumes)
+data_root: "/app/data"
+log_dir: "/app/logs"
+
+# LTTB downsampling settings
+lttb_resolution: 5000
+lttb_inflection_eps: 0.000001
+lttb_point_budget: 100
+lttb_reduction_factor: 0.4
+
+# Query limits
+max_upload_size_mb: 15000
+max_events_per_query: 200
+
+# Performance monitoring
+enable_performance_metrics: true
+
+# Rate limiting
+rate_limiting:
+  enabled: true
+  default_requests_per_minute: 120
+  upload_requests_per_minute: 10
+  render_requests_per_minute: 20
+  admin_requests_per_minute: 30
+  burst_allowance: 10
+
+# Caching
+caching:
+  enabled: true
+  filter_options_ttl_seconds: 3600
+  program_ids_ttl_seconds: 60
+  versions_ttl_seconds: 60
+  events_ttl_seconds: 30
+
+# Data validation
+validation:
+  max_nan_percentage: 5.0
+  min_rows: 10
+  max_rows: 1000000
+  check_timestamp_monotonicity: true
+
+# NOTE: Filter options are now defined in schema.yaml (single source of truth)
+

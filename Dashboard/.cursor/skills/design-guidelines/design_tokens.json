@@ -1,0 +1,172 @@
+{
+  "$schema": "https://schemas.designtokens.org/2023/draft/design-tokens.schema.json",
+  "$description": "Multimatic Workbench design tokens. Shadcn-named, Tailwind v4 compatible. Mirrors client/src/app/globals.css :root.",
+  "color": {
+    "light": {
+      "$type": "color",
+      "background": { "$value": "#ffffff" },
+      "foreground": { "$value": "#1d1d1f" },
+      "card": { "$value": "#ffffff" },
+      "card-foreground": { "$value": "#1d1d1f" },
+      "popover": { "$value": "#ffffff" },
+      "popover-foreground": { "$value": "#1d1d1f" },
+      "primary": { "$value": "#1d1d1f" },
+      "primary-foreground": { "$value": "#ffffff" },
+      "secondary": { "$value": "#f5f5f7" },
+      "secondary-foreground": { "$value": "#1d1d1f" },
+      "muted": { "$value": "#f5f5f7" },
+      "muted-foreground": { "$value": "#86868b" },
+      "accent": { "$value": "#f5f5f7" },
+      "accent-foreground": { "$value": "#1d1d1f" },
+      "destructive": { "$value": "#ff3b30" },
+      "destructive-foreground": { "$value": "#ffffff" },
+      "border": { "$value": "#e8e8ed" },
+      "input": { "$value": "#e8e8ed" },
+      "ring": { "$value": "#1d1d1f" },
+      "chart-1": { "$value": "#1d1d1f" },
+      "chart-2": { "$value": "#34c759" },
+      "chart-3": { "$value": "#5856d6" },
+      "chart-4": { "$value": "#ff9500" },
+      "chart-5": { "$value": "#af52de" },
+      "sidebar": { "$value": "#fafafa" },
+      "sidebar-foreground": { "$value": "#1d1d1f" },
+      "sidebar-primary": { "$value": "#1d1d1f" },
+      "sidebar-primary-foreground": { "$value": "#ffffff" },
+      "sidebar-accent": { "$value": "#f0f0f2" },
+      "sidebar-accent-foreground": { "$value": "#1d1d1f" },
+      "sidebar-border": { "$value": "#e8e8ed" },
+      "sidebar-ring": { "$value": "#1d1d1f" }
+    },
+    "dark": {
+      "$type": "color",
+      "$description": "Proposed -- review before adding to globals.css. Derived from the iOS dark system palette.",
+      "$extensions": { "status": "proposed" },
+      "background": { "$value": "#000000" },
+      "foreground": { "$value": "#f5f5f7" },
+      "card": { "$value": "#1c1c1e" },
+      "card-foreground": { "$value": "#f5f5f7" },
+      "popover": { "$value": "#1c1c1e" },
+      "popover-foreground": { "$value": "#f5f5f7" },
+      "primary": { "$value": "#f5f5f7" },
+      "primary-foreground": { "$value": "#1d1d1f" },
+      "secondary": { "$value": "#2c2c2e" },
+      "secondary-foreground": { "$value": "#f5f5f7" },
+      "muted": { "$value": "#2c2c2e" },
+      "muted-foreground": { "$value": "#8e8e93" },
+      "accent": { "$value": "#2c2c2e" },
+      "accent-foreground": { "$value": "#f5f5f7" },
+      "destructive": { "$value": "#ff453a" },
+      "destructive-foreground": { "$value": "#ffffff" },
+      "border": { "$value": "#2c2c2e" },
+      "input": { "$value": "#3a3a3c" },
+      "ring": { "$value": "#f5f5f7" },
+      "chart-1": { "$value": "#f5f5f7" },
+      "chart-2": { "$value": "#30d158" },
+      "chart-3": { "$value": "#5e5ce6" },
+      "chart-4": { "$value": "#ff9f0a" },
+      "chart-5": { "$value": "#bf5af2" },
+      "sidebar": { "$value": "#1c1c1e" },
+      "sidebar-foreground": { "$value": "#f5f5f7" },
+      "sidebar-primary": { "$value": "#f5f5f7" },
+      "sidebar-primary-foreground": { "$value": "#1d1d1f" },
+      "sidebar-accent": { "$value": "#2c2c2e" },
+      "sidebar-accent-foreground": { "$value": "#f5f5f7" },
+      "sidebar-border": { "$value": "#2c2c2e" },
+      "sidebar-ring": { "$value": "#f5f5f7" }
+    }
+  },
+  "radius": {
+    "$type": "dimension",
+    "base": { "$value": "0.5rem", "$description": "--radius source value" },
+    "sm": { "$value": "0.25rem" },
+    "md": { "$value": "0.375rem" },
+    "lg": { "$value": "0.5rem" },
+    "xl": { "$value": "0.75rem" },
+    "2xl": { "$value": "1rem" },
+    "3xl": { "$value": "1.25rem" },
+    "4xl": { "$value": "1.5rem" },
+    "full": { "$value": "9999px" }
+  },
+  "font": {
+    "family": {
+      "$type": "fontFamily",
+      "sans": {
+        "$value": ["Geist Sans", "ui-sans-serif", "system-ui", "-apple-system", "BlinkMacSystemFont", "sans-serif"]
+      },
+      "mono": {
+        "$value": ["Geist Mono", "ui-monospace", "SFMono-Regular", "SF Mono", "Menlo", "monospace"]
+      }
+    }
+  },
+  "elevation": {
+    "$type": "shadow",
+    "flat": {
+      "$value": { "color": "transparent", "offsetX": "0", "offsetY": "0", "blur": "0", "spread": "0" },
+      "$description": "No surface separation."
+    },
+    "surface": {
+      "$value": [
+        { "color": "rgba(0, 0, 0, 0.04)", "offsetX": "0", "offsetY": "1px", "blur": "2px", "spread": "0" }
+      ],
+      "$description": "Inputs and buttons. Maps to Tailwind shadow-xs."
+    },
+    "raised": {
+      "$value": [
+        { "color": "rgba(0, 0, 0, 0.04)", "offsetX": "0", "offsetY": "1px", "blur": "3px", "spread": "0" },
+        { "color": "rgba(0, 0, 0, 0.02)", "offsetX": "0", "offsetY": "1px", "blur": "2px", "spread": "0" }
+      ],
+      "$description": "Cards and default workbench surfaces. Maps to .shadow-subtle."
+    },
+    "overlay": {
+      "$value": [
+        { "color": "rgba(0, 0, 0, 0.08)", "offsetX": "0", "offsetY": "4px", "blur": "12px", "spread": "0" },
+        { "color": "rgba(0, 0, 0, 0.04)", "offsetX": "0", "offsetY": "2px", "blur": "4px", "spread": "0" }
+      ],
+      "$description": "Popovers, dropdowns, tooltips. Maps to .shadow-elevated."
+    },
+    "modal": {
+      "$value": [
+        { "color": "rgba(0, 0, 0, 0.25)", "offsetX": "0", "offsetY": "25px", "blur": "50px", "spread": "-12px" }
+      ],
+      "$description": "Dialogs and sheets. Maps to Tailwind shadow-xl."
+    }
+  },
+  "z-index": {
+    "$type": "number",
+    "base": { "$value": 0 },
+    "sticky": { "$value": 10 },
+    "dropdown": { "$value": 20 },
+    "sidebar": { "$value": 30 },
+    "header": { "$value": 40 },
+    "overlay": { "$value": 50 },
+    "modal": { "$value": 60 },
+    "toast": { "$value": 70 },
+    "tooltip": { "$value": 80 }
+  },
+  "motion": {
+    "duration": {
+      "$type": "duration",
+      "fast": { "$value": "150ms" },
+      "normal": { "$value": "200ms" },
+      "slow": { "$value": "300ms" }
+    },
+    "easing": {
+      "$type": "cubicBezier",
+      "standard": { "$value": [0.4, 0, 0.2, 1], "$description": "Maps to .transition-smooth." }
+    }
+  },
+  "icon": {
+    "size": {
+      "$type": "dimension",
+      "xs": { "$value": "12px", "$description": "size-3" },
+      "sm": { "$value": "16px", "$description": "size-4. shadcn button default." },
+      "md": { "$value": "20px", "$description": "size-5. App sidebar nav." },
+      "lg": { "$value": "24px", "$description": "size-6" },
+      "xl": { "$value": "32px", "$description": "size-8" }
+    },
+    "stroke": {
+      "$type": "number",
+      "default": { "$value": 2, "$description": "lucide-react default; do not override." }
+    }
+  }
+}

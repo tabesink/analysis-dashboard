@@ -1,0 +1,108 @@
+# RSP Data Analytics Dashboard - Server Configuration
+# Copy this file to settings.yaml and customize as needed.
+# Environment variables override these values.
+
+# =============================================================================
+# Server Settings
+# =============================================================================
+host: "0.0.0.0"
+port: 8000
+debug: false
+log_level: "INFO"
+
+# =============================================================================
+# Storage Paths
+# =============================================================================
+# All paths are relative to the project root
+data_root: "data"
+log_dir: "logs"
+
+# =============================================================================
+# LTTB Downsampling Settings
+# =============================================================================
+# Maximum number of points per plot after downsampling
+lttb_resolution: 5000
+lttb_inflection_eps: 0.000001
+lttb_point_budget: 100
+
+# Reduction factor (0.0-1.0) - alternative to fixed resolution
+# If set, computes target_points = original_points * lttb_reduction_factor
+lttb_reduction_factor: 0.4
+
+# =============================================================================
+# Query Limits
+# =============================================================================
+# Maximum number of events per dashboard query
+max_events_per_query: 200
+
+# Maximum upload size in MB (CSV uploads and database import ZIP; use 15000+ for large DB exports)
+max_upload_size_mb: 15000
+
+# =============================================================================
+# CORS Settings
+# =============================================================================
+# Allowed origins for cross-origin requests
+cors_origins:
+  - "http://localhost:3000"
+  - "http://127.0.0.1:3000"
+  - "http://localhost:3001"
+  - "http://127.0.0.1:3001"
+  - "http://localhost:3002"
+  - "http://127.0.0.1:3002"
+
+# =============================================================================
+# Performance
+# =============================================================================
+enable_performance_metrics: true
+
+# =============================================================================
+# Rate Limiting
+# =============================================================================
+# Token bucket rate limiting (for single-user deployment, no Redis needed)
+rate_limiting:
+  enabled: true
+  # Requests per minute limits by endpoint category
+  default_requests_per_minute: 120
+  upload_requests_per_minute: 10
+  render_requests_per_minute: 20
+  admin_requests_per_minute: 30
+  # Extra tokens allowed for burst traffic
+  burst_allowance: 10
+
+# =============================================================================
+# Server-Side Caching
+# =============================================================================
+# In-memory TTL cache (for single-user deployment, no Redis needed)
+caching:
+  enabled: true
+  # TTL in seconds for different data types
+  filter_options_ttl_seconds: 3600   # 1 hour (static config)
+  program_ids_ttl_seconds: 60        # 1 minute (changes on upload)
+  versions_ttl_seconds: 60           # 1 minute (changes on upload)
+  events_ttl_seconds: 30             # 30 seconds (frequently queried)
+
+# =============================================================================
+# Data Validation
+# =============================================================================
+# Validation rules applied during CSV ingestion
+validation:
+  # Maximum percentage of NaN/Inf values before warning
+  max_nan_percentage: 5.0
+  # Row count bounds (files outside these bounds are rejected)
+  min_rows: 10
+  max_rows: 1000000
+  # Check if first column (time) is monotonically increasing
+  check_timestamp_monotonicity: true
+
+# =============================================================================
+# Filter Options
+# =============================================================================
+# Filter options are now defined in schema.yaml (single source of truth).
+# Each filter column in dim_event has a 'filter' block with:
+#   - display_name: UI label
+#   - order: UI display order
+#   - values: dropdown options
+#
+# See schema.yaml for filter column definitions.
+# API endpoint: GET /api/v1/dashboard/filter-options
+

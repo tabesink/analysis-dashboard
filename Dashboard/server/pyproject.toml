@@ -1,0 +1,58 @@
+[project]
+name = "rsp-dashboard-api"
+version = "1.1.0"
+description = "RSP Data Analytics Dashboard API - FastAPI + DuckDB"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.109.0,<1.0.0",
+    "uvicorn[standard]>=0.27.0,<1.0.0",
+    "pandas>=2.1.0,<3.0.0",
+    "numpy>=1.26.0",
+    "duckdb>=1.4.3",
+    "pyarrow>=17.0.0",
+    "pydantic>=2.5.0,<3.0.0",
+    "pydantic-settings>=2.1.0,<3.0.0",
+    "pyyaml>=6.0.1,<7.0.0",
+    "python-multipart>=0.0.6,<1.0.0",
+    "matplotlib>=3.8.0,<4.0.0",
+    "psutil>=5.9.0,<6.0.0",
+    "ipykernel>=7.2.0",
+    "bcrypt>=5.0.0",
+    "pyjwt>=2.11.0",
+    "py-fatigue>=2.1.0",
+    "pytz>=2025.2",
+    "rpc-reader>=0.9",
+]
+
+[project.scripts]
+server = "server.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.25.0",
+    "ruff>=0.1.9",
+    "mypy>=1.8.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["../tests/server"]
+python_files = "test_*.py"
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+

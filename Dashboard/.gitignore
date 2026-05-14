@@ -1,0 +1,54 @@
+# Data folder - excluded from version control
+data/
+.commits/
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Node.js
+node_modules/
+.next/
+out/
+.turbo/
+
+# IDE/Editor
+#.cursor/
+# Share interpreter path for notebooks + server; keep other .vscode files local
+.vscode/*
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Prompts and references (if these are personal/local)
+.prompts/
+.references/
+
+# Lock files (optional - you may want to keep uv.lock)
+# uv.lock
+

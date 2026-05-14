@@ -1,0 +1,343 @@
+RSP Data Analytics Dashboard - Database Schema
+================================================
+Last updated: 2026-04-29
+Engine: DuckDB (single file at data/dashboard.db at runtime)
+Sources: server/schema.yaml (dim tables), server/storage/database.py (_init_schema)
+
+================================================================================
+SEQUENCES
+================================================================================
+
+seq_audit_log_id              START 1    (schema.yaml)
+seq_meas_lttb_id              START 1    (schema.yaml)
+seq_saved_filter_id           START 1    (schema.yaml)
+seq_event_access_id           START 1    (schema.yaml)
+seq_channel_map_id            START 1    (database.py)
+seq_meas_raw_id               START 1    (database.py)
+seq_custom_field_value_id     START 1    (database.py)
+seq_event_custom_field_value_id START 1  (database.py)
+seq_ingestion_artifact_id     START 1    (database.py)
+
+================================================================================
+TABLES
+================================================================================
+
+--------------------------------------------------------------------------------
+dim_program  (schema.yaml)
+  Program metadata
+--------------------------------------------------------------------------------
+  program_id          VARCHAR       PK
+  name                VARCHAR       NULLABLE
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+
+--------------------------------------------------------------------------------
+dim_event  (schema.yaml + database.py ALTER TABLE additions)
+  Event metadata with filter columns. One row per uploaded CSV file.
+--------------------------------------------------------------------------------
+  -- Identity
+  event_id            VARCHAR       PK
+  program_id          VARCHAR       NOT NULL
+  version             VARCHAR       NOT NULL
+
+  -- Filter columns (with UI filter config in schema.yaml)
+  status              VARCHAR       filter order=1   values: Approved, Obsolete, Pending
+  rfq                 BOOLEAN       filter order=2   values: Applicable, Not Applicable
+  dv                  BOOLEAN       filter order=3   values: Applicable, Not Applicable
+  pv                  BOOLEAN       filter order=4   values: Applicable, Not Applicable
+  post_prod           BOOLEAN       filter order=5   values: Applicable, Not Applicable
+  suspension_component VARCHAR      filter order=6   values: A-Arm (UCA), A-Arm (LCA), L-Arm, H-Arm, Trailing Arm, Tension Link, Lateral Link, Upper Trailing Link, Lower Trailing Link, Camber Link, Spring Link, Toe Link
+  axle_location       VARCHAR       filter order=7   values: Front, Rear
+  gross_vehicle_weight_range_lbs VARCHAR filter order=8 values: 1000-1500 .. 9500-10000 (18 ranges, 500lb increments)
+  fgawr_range_lbs     VARCHAR       filter order=9   values: 1000-1500 .. 9500-10000
+  rgawr_range_lbs     VARCHAR       filter order=10  values: 1000-1500 .. 9500-10000
+  drive_type          VARCHAR       filter order=11  values: ICE, BEV, PHEV
+  material_construction VARCHAR     filter order=12  values: Steel (stamped & welded), Steel (forged), Steel (stamped), Ductile Iron (cast), Aluminum (forged), Aluminum (cast)
+  steering_position   VARCHAR       filter order=13  values: RHS, LHS
+  damper_type         VARCHAR       filter order=14  values: Coil Over, Air Suspension
+  vehicle_type        VARCHAR       filter order=15  values: Sedan, Truck, Van, SUV, Heavy Duty, Off-Road, Other
+
+  -- Non-filter data columns
+  gvw                 VARCHAR
+  fgawr               VARCHAR
+  rgawr               VARCHAR
+  job_number          VARCHAR
+  work_order          VARCHAR
+
+  -- Ownership (multi-user)
+  uploaded_by_user_id VARCHAR       NULLABLE (added via ALTER TABLE)
+  last_updated_by_user_id VARCHAR   NULLABLE (added via ALTER TABLE)
+
+  -- System
+  source_file         VARCHAR
+  file_hash           VARCHAR(16)
+  row_count           INTEGER
+  is_deleted          BOOLEAN       DEFAULT FALSE
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  updated_at          TIMESTAMP
+
+--------------------------------------------------------------------------------
+dim_channel_map  (database.py)
+  Plot channel configuration per program/version/plot_key
+--------------------------------------------------------------------------------
+  id                  BIGINT        PK  DEFAULT nextval('seq_channel_map_id')
+  program_id          VARCHAR       NOT NULL
+  version             VARCHAR       NOT NULL
+  plot_key            VARCHAR       NOT NULL
+  x_col               INTEGER       zero-based CSV column index
+  y_col               INTEGER       zero-based CSV column index
+  x_channel           VARCHAR       NOT NULL
+  y_channel           VARCHAR       NOT NULL
+  plot_order          INTEGER       DEFAULT 0
+  x_scale_factor      DOUBLE        DEFAULT 1.0
+  y_scale_factor      DOUBLE        DEFAULT 1.0
+  x_unit              VARCHAR
+  y_unit              VARCHAR
+  UNIQUE (program_id, version, plot_key)
+
+--------------------------------------------------------------------------------
+ingestion_artifacts  (database.py)
+  Retained CSV artifacts for pending channel-map setup and later reprocessing
+--------------------------------------------------------------------------------
+  artifact_id         BIGINT        PK  DEFAULT nextval('seq_ingestion_artifact_id')
+  program_id          VARCHAR       NOT NULL
+  version             VARCHAR       NOT NULL
+  source_file         VARCHAR       NOT NULL
+  artifact_path       VARCHAR       NOT NULL  (relative to data_root)
+  artifact_kind       VARCHAR       NOT NULL  (csv, converted_csv)
+  file_hash           VARCHAR       NOT NULL
+  row_count           INTEGER       DEFAULT 0
+  column_count        INTEGER       DEFAULT 0
+  preview_json        JSON          first 20 CSV lines for editor preview
+  metadata_json       JSON          upload metadata needed for later processing
+  custom_fields_json  JSON          upload custom-field values
+  status              VARCHAR       DEFAULT 'pending' (pending, processed, failed)
+  error               VARCHAR
+  event_id            VARCHAR       processed dim_event id, when available
+  owner_user_id       VARCHAR
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  updated_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  UNIQUE (program_id, version, file_hash)
+
+--------------------------------------------------------------------------------
+users  (database.py)
+  Authenticated users
+--------------------------------------------------------------------------------
+  id                  VARCHAR       PK
+  username            VARCHAR       NOT NULL UNIQUE
+  role                VARCHAR       NOT NULL   (values: user, admin)
+  password_hash       VARCHAR
+  can_write           BOOLEAN       DEFAULT FALSE  (admin rows forced TRUE; ALTER TABLE IF NOT EXISTS)
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  last_login_at       TIMESTAMP
+  last_settings_visit_at TIMESTAMP                  (admin notification baseline; ALTER TABLE IF NOT EXISTS)
+
+--------------------------------------------------------------------------------
+measurements_raw  (database.py)
+  Raw time-series signal data in long format
+--------------------------------------------------------------------------------
+  id                  BIGINT        PK  DEFAULT nextval('seq_meas_raw_id')
+  event_id            VARCHAR       NOT NULL
+  timestamp           DOUBLE        NOT NULL
+  channel_name        VARCHAR       NOT NULL
+  value               DOUBLE
+
+--------------------------------------------------------------------------------
+measurements_lttb  (database.py)
+  LTTB-downsampled plot data
+--------------------------------------------------------------------------------
+  id                  BIGINT        PK  DEFAULT nextval('seq_meas_lttb_id')
+  event_id            VARCHAR       NOT NULL
+  plot_key            VARCHAR       NOT NULL
+  x                   FLOAT         NOT NULL
+  y                   FLOAT         NOT NULL
+
+--------------------------------------------------------------------------------
+sessions  (database.py)
+  User session state (JSON blobs + expiry)
+--------------------------------------------------------------------------------
+  session_id          VARCHAR       PK
+  user_id             VARCHAR       (added via ALTER TABLE)
+  data_state          JSON          (added via ALTER TABLE; replaces baseline/new_data)
+  baseline_state      JSON          (legacy, kept for migration)
+  new_data_state      JSON          (legacy, kept for migration)
+  global_filters      JSON
+  rendered_event_ids  JSON          (added via ALTER TABLE)
+  ui_preferences      JSON
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  updated_at          TIMESTAMP
+  expires_at          TIMESTAMP
+
+--------------------------------------------------------------------------------
+upload_tasks  (database.py)
+  Upload task state for async CSV progress streaming
+--------------------------------------------------------------------------------
+  task_id             VARCHAR       PK
+  created_by_user_id  VARCHAR       NOT NULL
+  status              VARCHAR       NOT NULL
+  phase               VARCHAR       NOT NULL
+  completed_events    INTEGER       DEFAULT 0
+  total_events        INTEGER       DEFAULT 0
+  current_event       VARCHAR
+  error               VARCHAR
+  result_json         JSON
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  updated_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  expires_at          TIMESTAMP     NOT NULL
+
+--------------------------------------------------------------------------------
+saved_filters  (database.py)
+  Saved filter presets
+--------------------------------------------------------------------------------
+  id                  BIGINT        PK  DEFAULT nextval('seq_saved_filter_id')
+  user_id             VARCHAR       (added via ALTER TABLE)
+  name                VARCHAR       NOT NULL
+  data_state          JSON          (added via ALTER TABLE; replaces baseline/new_data)
+  baseline_state      JSON          (legacy, kept for migration)
+  new_data_state      JSON          (legacy, kept for migration)
+  global_filters      JSON
+  is_default          BOOLEAN       DEFAULT FALSE
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+
+--------------------------------------------------------------------------------
+user_preferences  (database.py)
+  Per-user UI preferences
+--------------------------------------------------------------------------------
+  user_id             VARCHAR       PK  DEFAULT 'default'
+  pinned_baseline_event_id VARCHAR
+  default_program_id  VARCHAR
+  grid_columns        INTEGER       DEFAULT 3
+  grid_layout_order   JSON
+  theme               VARCHAR       DEFAULT 'light'
+  baseline_opacity    FLOAT         DEFAULT 0.5
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  updated_at          TIMESTAMP
+
+--------------------------------------------------------------------------------
+audit_log  (database.py)
+  Audit trail for tracked actions
+--------------------------------------------------------------------------------
+  id                  BIGINT        PK  DEFAULT nextval('seq_audit_log_id')
+  action              VARCHAR       NOT NULL
+  user_id             VARCHAR
+  event_id            VARCHAR
+  details             JSON
+  timestamp           TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+
+--------------------------------------------------------------------------------
+event_access_log  (database.py)
+  Event access tracking
+--------------------------------------------------------------------------------
+  id                  BIGINT        PK  DEFAULT nextval('seq_event_access_id')
+  event_id            VARCHAR       NOT NULL
+  access_type         VARCHAR       NOT NULL
+  partition           VARCHAR
+  accessed_at         TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+
+--------------------------------------------------------------------------------
+custom_field_definitions  (database.py)
+  Admin-defined custom filter fields
+--------------------------------------------------------------------------------
+  field_key           VARCHAR       PK
+  display_name        VARCHAR       NOT NULL UNIQUE
+  data_type           VARCHAR       NOT NULL DEFAULT 'string'
+  is_filterable       BOOLEAN       DEFAULT TRUE
+  created_by_user_id  VARCHAR
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  updated_at          TIMESTAMP
+
+--------------------------------------------------------------------------------
+custom_field_allowed_values  (database.py)
+  Program-scoped allowed values for custom fields
+--------------------------------------------------------------------------------
+  id                  BIGINT        PK  DEFAULT nextval('seq_custom_field_value_id')
+  field_key           VARCHAR       NOT NULL
+  program_id          VARCHAR       NOT NULL
+  value               VARCHAR       NOT NULL
+  sort_order          INTEGER       DEFAULT 0
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  UNIQUE (field_key, program_id, value)
+
+--------------------------------------------------------------------------------
+event_custom_field_values  (database.py)
+  Event-level custom field values
+--------------------------------------------------------------------------------
+  id                  BIGINT        PK  DEFAULT nextval('seq_event_custom_field_value_id')
+  event_id            VARCHAR       NOT NULL
+  field_key           VARCHAR       NOT NULL
+  value               VARCHAR       NOT NULL
+  created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+  UNIQUE (event_id, field_key)
+
+--------------------------------------------------------------------------------
+_schema_metadata  (database.py)
+  Schema metadata for portability / runtime discovery
+--------------------------------------------------------------------------------
+  key                 VARCHAR       PK
+  value               JSON
+  updated_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+
+================================================================================
+INDEXES
+================================================================================
+
+idx_event_program                      dim_event(program_id)
+idx_event_version                      dim_event(program_id, version)
+idx_event_status                       dim_event(status)
+idx_event_deleted                      dim_event(is_deleted)
+idx_event_file_hash                    dim_event(file_hash)
+idx_event_uploaded_by_user             dim_event(uploaded_by_user_id)
+idx_channel_map                        dim_channel_map(program_id, version)
+idx_meas_raw_event                     measurements_raw(event_id)
+idx_meas_raw_event_channel             measurements_raw(event_id, channel_name)
+idx_meas_lttb_event                    measurements_lttb(event_id, plot_key)
+idx_meas_lttb_covering                 measurements_lttb(plot_key, event_id, x, y)
+idx_sessions_expires                   sessions(expires_at)
+idx_sessions_user                      sessions(user_id)
+idx_upload_tasks_user                  upload_tasks(created_by_user_id)
+idx_upload_tasks_expires               upload_tasks(expires_at)
+idx_saved_filters_user                 saved_filters(user_id)
+idx_users_username                     users(username)
+idx_event_access_recent                event_access_log(accessed_at DESC)
+idx_custom_field_definitions_filterable custom_field_definitions(is_filterable)
+idx_custom_field_allowed_values_lookup  custom_field_allowed_values(field_key, program_id, sort_order)
+idx_event_custom_field_values_event     event_custom_field_values(event_id)
+idx_event_custom_field_values_field     event_custom_field_values(field_key, value)
+
+================================================================================
+LOGICAL RELATIONSHIPS (no enforced FKs)
+================================================================================
+
+dim_program.program_id        <-- dim_event.program_id
+dim_event.event_id            <-- measurements_raw.event_id
+dim_event.event_id            <-- measurements_lttb.event_id
+dim_event.event_id            <-- event_custom_field_values.event_id
+dim_event.event_id            <-- event_access_log.event_id
+dim_channel_map(program_id, version)  links plot definitions for events
+users.id                      <-- sessions.user_id
+users.id                      <-- upload_tasks.created_by_user_id
+users.id                      <-- saved_filters.user_id
+users.id                      <-- dim_event.uploaded_by_user_id
+users.id                      <-- audit_log.user_id
+users.id                      <-- custom_field_definitions.created_by_user_id
+custom_field_definitions.field_key <-- custom_field_allowed_values.field_key
+custom_field_definitions.field_key <-- event_custom_field_values.field_key
+
+Consistency is enforced by application logic, not DB constraints.
+Use UnifiedStore.get_relationship_orphan_counts() to validate FK readiness.
+
+================================================================================
+NOTES
+================================================================================
+
+- Several dim_event columns are added via ALTER TABLE IF NOT EXISTS in
+  database.py _init_schema for backwards compatibility with older .db files.
+- Legacy "maturity" column is backfilled into "status" during init if present.
+- schema.yaml version field tracks schema version for portability checks.
+- _schema_metadata stores filter_options, filter_columns, schema_version
+  for export/import compatibility validation.
+
+Portable export format (admin UI / API), not the live DB file:
+- Admin export produces a ZIP (e.g. dashboard_export.zip) containing Parquet files
+  (ZSTD compression), plus schema.sql and load.sql generated by UnifiedStore.export_to_parquet.
+- Admin import accepts that ZIP only; UnifiedStore.import_from_parquet rebuilds dashboard.db
+  from those artifacts, then runs _init_schema() to align with the current app schema.
