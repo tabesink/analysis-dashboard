@@ -7,11 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-05-19
+
+### Fixed
+- LAN Docker proxy now allows large database import uploads (`client_max_body_size` aligned with API `max_upload_size_mb`; extended API proxy timeouts for multi-GB ZIP uploads).
+
+## [1.3.0] - 2026-05-19
+
+### Added
+- Cross-user data refresh: authenticated sessions poll for database changes and automatically refresh event catalogs, filters, and program/version lists.
+- Admin-only Load Data Transfer section on the Database page for Parquet ZIP export and import.
+- Version label in the header now shows client/server versions plus live and target database schema versions.
+
+### Changed
+- Event metadata updates require the row's last-modified token and return HTTP 409 when another user changed the same event first.
+- Filter dropdowns and event listings now share validated server-side filter semantics for consistent results.
+
+## [1.2.1] - 2026-05-19
+
+### Fixed
+- Production startup now reconciles declared schema DDL before runtime backfills, fixing crash loops on legacy databases missing `users.can_write`.
+- Docker production server sets `MPLCONFIGDIR=/tmp/matplotlib` so matplotlib cache writes work on read-only root filesystems.
+
+## [1.2.0] - 2026-05-15
+
 ### Added
 - Direct `.rsp` uploads in the Database panel, converting them through the existing channel-map-based ingestion flow.
+- Env-primary production deployment files with a one-shot LAN deployment script and version/schema status visibility.
 
 ### Changed
 - Database upload now uses a single drag-and-drop import control instead of separate file and folder buttons.
+- The committed server settings file is now a development template; production secrets are expected from environment variables.
+
+### Security
+- Parquet ZIP import now rejects unsafe archive paths before extraction to keep failed imports inside managed temporary directories.
 
 ## [1.1.0] - 2026-03-31
 

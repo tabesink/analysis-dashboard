@@ -16,7 +16,7 @@
 /**
  * Application version (single source of truth from root VERSION file)
  */
-export const CLIENT_VERSION = "1.1.0";
+export const CLIENT_VERSION = "1.3.1";
 
 /**
  * Get formatted version string with 'v' prefix for display
