@@ -290,13 +290,9 @@ export function DatabaseEventTree({
           program.versions.map((version) => version.selectionKey),
         );
         const isFirstProgram = programIndex === 0;
-        const isLastProgram = programIndex === tree.length - 1;
-        // The last row rendered inside a program needs to drop its bottom
-        // border when another program follows it, so the next program's
-        // border-t is the single line at that boundary (no stacking). The
-        // last program keeps its bottom border — it IS the bottom of the
-        // table.
-        const suppressLastRowBorder = !isLastProgram;
+        // Program-tail rows should not render their own bottom border.
+        // A single table-tail divider is rendered after all rows instead.
+        const suppressLastRowBorder = true;
 
         return (
           <Collapsible
@@ -518,6 +514,7 @@ export function DatabaseEventTree({
           </Collapsible>
         );
       })}
+      <div className="border-b border-border" aria-hidden />
     </div>
   );
 }

@@ -1,7 +1,8 @@
 # RSP Data Analytics Dashboard - Master Build Plan
 
-**Version:** 1.0
-**Last Updated:** 2026-05-04
+**Version:** 1.1
+**Last Updated:** 2026-05-21
+**App version:** 1.3.7
 **Reference Documents:**
 - PRD: `docs/prd.md`
 - Tech Stack: `docs/tech-stack.md`
@@ -12,7 +13,7 @@
 
 ## Overview
 
-This build plan was reverse-engineered from the existing codebase to establish a baseline for tracked, incremental development going forward. All completed work is marked DONE with source file references. Phases 8-9 represent planned work.
+This build plan was reverse-engineered from the existing codebase to establish a baseline for tracked, incremental development going forward. All completed work is marked DONE with source file references. Phases 1–7, 10–14 are complete. Phase 8 multi-user hardening is largely complete (P2 production items remain). Phase 9 testing and CI automation is partially complete.
 
 ---
 
@@ -141,7 +142,7 @@ This build plan was reverse-engineered from the existing codebase to establish a
 | P5-28 | Binary plot data Web Worker | DONE | `client/src/workers/` |
 | P5-29 | API client layer (typed wrappers, error handling) | DONE | `client/src/lib/api/` |
 | P5-30 | Interactive viewer fallback to rendered event visibility source | DONE (2026-03-26) | `client/src/components/dashboard/interactive-viewer/InteractiveViewer.tsx` |
-| P5-31 | Hide Database portability subsection on Database route (temporary) | DONE (2026-03-30) | `client/src/components/upload/DatabaseSidePanel.tsx` |
+| P5-31 | Hide Database portability subsection on Database route (temporary) | SUPERSEDED (2026-05-19) | `client/src/components/upload/DatabaseSidePanel.tsx` | Hidden during 1.1.x; re-exposed as admin **Load Data Transfer** in 1.3.0 (see Phase 14). |
 | P5-32 | Increase CSV upload client timeout to 60 minutes for local-network large uploads | DONE (2026-03-30) | `client/src/lib/api/upload.ts` |
 | P5-33 | Add dashboard SidePanel vertical scrolling for Global Filters overflow | DONE (2026-03-30) | `client/src/components/dashboard/side-panel/SidePanel.tsx` |
 | P5-34 | Apply side-panel scroll through expanded Load Data subsection | DONE (2026-03-30) | `client/src/components/dashboard/side-panel/LoadDataSection.tsx` |
@@ -192,11 +193,11 @@ This build plan was reverse-engineered from the existing codebase to establish a
 
 ---
 
-## Phase 8: Multi-User Hardening (TODO)
+## Phase 8: Multi-User Hardening (MOSTLY DONE)
 
 **Objective:** Close correctness and concurrency gaps for production multi-user usage
 
-Source: Multi-user brainstorm analysis (2026-03-09)
+Source: Multi-user brainstorm analysis (2026-03-09). P0/P1 items shipped in 1.3.0; P2 production hardening items remain open.
 
 ### P0 - Critical Bugs
 
@@ -209,12 +210,12 @@ Source: Multi-user brainstorm analysis (2026-03-09)
 
 | Task ID | Task | Status | Key Files | Details |
 |---------|------|--------|-----------|---------|
-| P8-03 | Add `data_version` monotonic counter | TODO | `server/storage/database.py` | Increment on every write. Enables cross-user cache invalidation. |
-| P8-04 | Add `GET /api/v1/sync/version` endpoint | TODO | `server/routers/` (new) | Returns current data_version. Frontend polls every 5-15s. |
-| P8-05 | Frontend data version polling + query invalidation | TODO | `client/src/hooks/` (new) | Poll sync/version, invalidate `all-events`/filters when changed. |
-| P8-06 | Consistent cache invalidation on all write paths | TODO | `server/routers/upload.py`, `server/routers/dashboard.py` | Audit all write endpoints; ensure cache.invalidate() covers delete, custom-field update, metadata update. |
-| P8-07 | Optimistic concurrency control on updates | TODO | `server/routers/dashboard.py`, `server/models/dashboard.py` | Return `updated_at` in event payloads. Require `if_unmodified_since` on updates. Return 409 on conflict. |
-| P8-08 | Reduce frontend stale time for multi-user | TODO | `client/src/hooks/use-all-events.ts`, `client/src/app/providers.tsx` | Current staleTime=5min is too long for multi-user. Adjust once P8-05 polling is in place. |
+| P8-03 | Add `data_version` monotonic counter | DONE (2026-05-15) | `server/storage/database.py`, `tests/server/storage/test_schema_initialization.py`, `docs/tasks/P8-03.md` | Added a monotonic `data_version` counter stored in `_schema_metadata` and bumped on committed write transactions, with explicit opt-out for non-mutating maintenance paths. |
+| P8-04 | Add `GET /api/v1/sync/version` endpoint | DONE (2026-05-15) | `server/routers/sync.py`, `server/main.py`, `tests/server/routers/test_sync_router.py`, `docs/tasks/P8-04.md` | Added authenticated sync endpoint returning current `data_version` for polling clients, with route coverage for auth requirement and monotonic version behavior. |
+| P8-05 | Frontend data version polling + query invalidation | DONE (2026-05-15) | `client/src/hooks/use-data-version-sync.ts`, `client/src/app/providers.tsx`, `client/src/lib/api/sync.ts`, `client/src/lib/api/sync.test.ts`, `docs/tasks/P8-05.md` | Added client polling of `/sync/version` and invalidation of sync-sensitive dashboard queries when `data_version` increases. |
+| P8-06 | Consistent cache invalidation on all write paths | DONE (2026-05-15) | `server/routers/upload.py`, `server/routers/dashboard.py`, `server/services/query.py`, `tests/server/services/test_query_service_metadata.py`, `docs/tasks/P8-06.md` | Audited upload/dashboard write endpoints and aligned cache invalidation coverage: delete + metadata writes invalidate event/program/version groups, and custom-field writes invalidate filter-options cache. |
+| P8-07 | Optimistic concurrency control on updates | DONE (2026-05-15) | `server/models/dashboard.py`, `server/services/query.py`, `server/storage/database.py`, `server/routers/dashboard.py`, `tests/server/services/test_query_service_metadata.py`, `tests/server/routers/test_dashboard_router.py`, `docs/tasks/P8-07.md` | Added atomic optimistic concurrency checks for single-event metadata writes: clients must send `if_unmodified_since`, stale tokens return `409`, and updates apply only when `updated_at` still matches. |
+| P8-08 | Reduce frontend stale time for multi-user | TODO | `client/src/hooks/use-all-events.ts`, `client/src/app/providers.tsx` | `data_version` polling (P8-05) is shipped; staleTime tuning still open. |
 | P8-13 | Metadata save UX feedback + bulk update performance | DONE (2026-03-09) | `client/src/app/database/filter-values/page.tsx`, `client/src/app/database/page.tsx`, `client/src/hooks/use-uploaded-datasets.ts`, `server/routers/dashboard.py`, `server/storage/database.py` | Add explicit save lifecycle feedback, endpoint timeout overrides, preserve table visibility during refresh, and replace per-event metadata loop with scoped batch update. |
 | P8-14 | Edit Metadata split-pane refactor + route migration | DONE (2026-03-09) | `client/src/app/database/edit/page.tsx`, `client/src/app/database/filter-values/page.tsx`, `client/src/config/sidebar-config.ts`, `client/src/config/header-config.ts`, `client/src/components/layout/NavMain.tsx` | Move Edit Metadata to `/database/edit`, add compatibility redirect from legacy route, adopt Database-style split-pane UI, and replace Custom Fields tab with local under-construction placeholder. |
 | P8-15 | Weight range filtering against raw values with SQL predicates | DONE (2026-03-09) | `server/services/query.py`, `server/storage/database.py`, `server/utils/weight_filters.py` | Apply GVWR/FGAWR/RGAWR range buckets to raw numeric fields in SQL for events/programs/versions queries, avoiding per-record application loops. |
@@ -226,25 +227,30 @@ Source: Multi-user brainstorm analysis (2026-03-09)
 |---------|------|--------|-----------|---------|
 | P8-09 | Move secrets to env-only (remove defaults from settings.yaml) | TODO | `server/settings.yaml`, `server/config.py` | `admin_secret` and `jwt_secret` should not have dev defaults in committed config. |
 | P8-10 | Enforce secure cookie in production | TODO | `server/settings.yaml` | `auth_cookie_secure: true` when behind HTTPS. |
-| P8-11 | Document horizontal scaling constraints | TODO | `docs/architecture/` | Single DuckDB file = single writer. Document when to migrate to Postgres. |
+| P8-11 | Document horizontal scaling constraints | DONE (2026-05-21) | `docs/architecture/deployment-and-scaling.md` | Single DuckDB file = single writer; documents release bundle path, import resource limits, and when to migrate. |
 | P8-12 | Program-version metadata edit flow + schema-driven visibility sync | DONE (2026-03-09) | `server/routers/dashboard.py`, `server/models/dashboard.py`, `client/src/app/database/filter-values/page.tsx`, `client/src/app/database/page.tsx` | Enable role-aware program-version metadata editing, selection metadata audit display updates, and ensure metadata fields auto-surface in Database columns and Global Filters. |
+| P8-17 | Parquet import ZIP path safety + data-safety inventory | DONE (2026-05-15) | `server/services/export.py`, `tests/server/services/test_export_service.py`, `docs/refactor/CONCURRENCY_AND_DATA_SAFETY_REVIEW.md`, `docs/tasks/P8-17.md` | Reject unsafe archive member paths during validation and background import before extraction, preserving current data on failed imports. |
 
 ---
 
-## Phase 9: Testing & Production (TODO)
+## Phase 9: Testing & Production (PARTIAL)
 
 **Objective:** Automated test suite, CI pipeline, production readiness
 
 | Task ID | Task | Status | Key Files | Details |
 |---------|------|--------|-----------|---------|
-| P9-01 | Backend unit tests (ETL, services, cache) | TODO | `tests/server/` | See test-strategy.md Section 2.1 |
-| P9-02 | Backend integration tests (API endpoints) | TODO | `tests/server/` | See test-strategy.md Section 2.2 |
-| P9-03 | Frontend E2E tests (Playwright) | TODO | `tests/e2e/` | See test-strategy.md Section 2.3 |
-| P9-04 | CI pipeline (GitHub Actions) | TODO | `.github/workflows/` | Lint, type-check, pytest, Playwright |
-| P9-05 | Test data fixtures | TODO | `tests/fixtures/` | Sample CSVs, channel maps, temp DuckDB |
-| P9-06 | Production Docker config | TODO | `docker-compose.prod.yml` | Prod env vars, health checks, resource limits |
+| P9-01 | Backend unit tests (ETL, services, cache) | PARTIAL (2026-05-21) | `tests/server/` | ~114 pytest tests; ETL parser/validator/transformer and cache still gaps. See test-strategy.md. |
+| P9-02 | Backend integration tests (API endpoints) | PARTIAL (2026-05-21) | `tests/server/routers/` | Router coverage for auth, export, upload, sync, admin, health, dashboard metadata. |
+| P9-03 | Frontend E2E tests (Playwright) | TODO | `tests/e2e/` | Playwright dependency present; no suite written. |
+| P9-04 | CI pipeline (GitHub Actions) | PARTIAL (2026-05-21) | `.github/workflows/version-sync.yml` | Version sync only; full lint/test CI still TODO. |
+| P9-05 | Test data fixtures | PARTIAL (2026-05-21) | `tests/server/fixtures/`, `tests/conftest.py` | Temp DuckDB + export ZIP fixtures exist; sample CSV/channel_map library incomplete. |
+| P9-06 | Production Docker config | DONE (2026-05-15) | `Deployment/docker-compose.yml`, `Deployment/.env.example`, `Deployment/scripts/deploy.sh`, `Deployment/scripts/deploy.ps1`, `Deployment/README.md` | Superseded the older `Dashboard/deployment/` path with the repo-level release bundle: single-origin LAN proxy, versioned image tarball, release notes, checksums, and Windows/Linux deploy scripts. |
 | P9-07 | Performance baseline | TODO | `tests/performance/` | k6 or locust scripts for upload + plot queries |
 | P9-08 | Mode-driven network exposure + production config guards | DONE (2026-03-10) | `server/config.py`, `server/settings.yaml`, `client/package.json`, `docker-compose.yml` | Add `app_env` mode for non-container runs, keep dev localhost-only, expose network only in production mode, and enforce production security checks (debug/cookie/jwt/CORS constraints). |
+| P9-09 | Export/import admin guard router tests | DONE (2026-05-15) | `server/routers/export.py`, `tests/server/routers/test_export_router.py` | Add route-level coverage proving database portability endpoints reject unauthenticated/read-only/write users and allow admins through lightweight route contracts; fix reserved logging key on admin import upload. |
+| P9-10 | Upload scope-delete ownership and cache router tests | DONE (2026-05-15) | `tests/server/routers/test_upload_router.py` | Add route-level coverage proving write-enabled users can hard-delete only fully owned program/version scopes, admins can delete mixed-owner scopes, and successful deletes invalidate event-related cache groups. |
+| P9-11 | Frontend API client regression tests and Vitest wiring | DONE (2026-05-15) | `client/src/lib/api/client.test.ts`, `client/vitest.config.ts`, `docs/test-strategy.md`, `docs/tasks/P9-11.md` | Add frontend regression tests for API client credentials inclusion, error normalization, and timeout behavior; wire Vitest alias resolution for `@/` imports. |
+| P9-12 | Dashboard workspace pruning contract hardening | DONE (2026-05-15) | `client/src/hooks/use-event-catalog.ts`, `client/src/components/dashboard/side-panel/LoadDataSection.tsx`, `client/src/modules/dashboard-workspace/dashboard-workspace.test.ts`, `docs/tasks/P9-12.md` | Keep selection pruning sourced from dashboard workspace dimension-filter whitelist; prevent search-only UI filtering from mutating session selection; add regression coverage for non-selectable-only selections. |
 
 ---
 
@@ -278,6 +284,12 @@ Source: Multi-user brainstorm analysis (2026-03-09)
 | P11-03 | Backend metadata orchestration + weight range domain dedupe + protocol seam cleanup + boundary tests | DONE (2026-03-30) | `server/services/query.py`, `server/routers/dashboard.py`, `server/utils/weight_ranges.py`, `server/services/ingestion.py`, `server/services/auth.py`, `server/dependencies.py`, `server/protocols.py`, `tests/server/services/test_query_service_metadata.py`, `tests/server/utils/test_weight_ranges.py` | Moved metadata mutation orchestration into service layer, extracted shared weight bucket derivation, removed stale `UnifiedDatabase` protocol, and added boundary tests for metadata/weight logic. |
 | P11-04 | Minimal DB hardening: router boundary tightening + upload query service + filter/session contract alignment + regression tests | DONE (2026-03-30) | `server/services/query.py`, `server/routers/dashboard.py`, `server/services/upload_query.py`, `server/routers/upload.py`, `server/dependencies.py`, `client/src/hooks/use-all-events.ts`, `client/src/hooks/use-event-catalog.ts`, `client/src/types/session.ts`, `client/src/lib/api/session.ts`, `tests/server/services/test_boundary_regressions.py` | Removed router DB reach-through, moved dataset read SQL behind a service boundary, aligned frontend event retrieval with backend filter semantics, tightened session request payload typing, and added service-level regression tests for DB invariants. |
 | P11-05 | Database nested event tree + `display*` indirection removal + Edit Events mixed-null save fix | DONE (2026-04-16) | `client/src/components/upload/DatabaseEventTree.tsx`, `client/src/app/database/page.tsx`, `client/src/app/database/edit/page.tsx` | Replaced the flat Database table with a nested Program > Version > Event `Collapsible` tree, scoped status and delete to the level where they are semantically meaningful, removed the stale `display*` / `meta:*` column-key indirection in favor of raw `DatasetInfo` keys, and split `buildProgramVersionDraftValues` into `{ draft, baseline }` so Save correctly propagates values to mixed-null event groups. See DEC-030, DEC-031. |
+| P11-06 | Dashboard workspace and filter semantics modules | DONE (2026-05-15) | `client/src/modules/dashboard-workspace/`, `client/src/components/dashboard/DashboardContent.tsx`, `server/modules/filter_semantics/`, `server/services/query.py`, `server/storage/database.py`, `tests/server/modules/filter_semantics/test_filter_semantics.py`, `tests/server/services/test_filter_semantics_integration.py` | Added deeper module interfaces for Dashboard selection/catalog/session rules and server-side filter meaning. Event, program, and version query paths now execute validated filter plans. See DEC-046 and `docs/tasks/P11-06.md`. |
+| P11-07 | Database schema DDL ownership consolidation | DONE (2026-05-15) | `server/schema.yaml`, `server/storage/schema_loader.py`, `server/storage/schema_applier.py`, `server/storage/database.py`, `server/storage/migrations.py`, `tests/server/storage/test_schema_initialization.py`, `docs/database-schema.txt`, `docs/tasks/P11-07.md` | Normalized `server/schema.yaml` into the full declared DuckDB DDL registry, moved schema application behind a shared applier used by startup and migrations, kept data backfills in `_init_schema()`, and added behavior coverage for fresh initialization and additive upgrades. See DEC-049. |
+| P11-08 | Declared-vs-live schema doctor classification report | DONE (2026-05-15) | `server/storage/migrations.py`, `tests/server/storage/test_schema_initialization.py`, `docs/tasks/P11-08.md` | Added schema doctor reporting in migration diff output to classify declared vs live tables as `OK`, `MISSING`, `TYPE_MISMATCH`, or `DRIFT`, while preserving existing missing/extra table compatibility fields and adding behavior coverage for all statuses. See DEC-050. |
+| P11-09 | Data backfill extraction from schema initialization path | DONE (2026-05-15) | `server/storage/data_backfills.py`, `server/storage/database.py`, `tests/server/storage/test_schema_initialization.py`, `docs/database-schema.txt`, `docs/tasks/P11-09.md` | Extracted startup row-backfills into a dedicated module invoked after declared schema apply, preserving startup behavior and idempotency with focused storage coverage. See DEC-052. |
+| P11-10 | Startup schema mutation ownership cleanup | DONE (2026-05-15) | `server/main.py`, `server/storage/migrations.py`, `server/storage/database.py`, `tests/server/storage/test_schema_initialization.py`, `docs/tasks/P11-10.md` | Added one canonical startup entry point that runs schema migration/apply, opens `UnifiedStore` as the connection owner, and applies startup backfills in-order without changing runtime behavior or locking model. See DEC-053. |
+| P11-11 | Initial `UnifiedStore` repository extraction (users/sessions first) | DONE (2026-05-15) | `server/storage/repositories/`, `server/storage/database.py`, `tests/server/storage/test_schema_initialization.py`, `docs/tasks/P11-11.md` | Extracted low-risk `users` and `sessions` SQL operations into repository modules while keeping `UnifiedStore` as the only DuckDB connection owner and preserving existing service contracts/behavior. See DEC-054. |
 
 ---
 
@@ -308,6 +320,41 @@ Source: DEC-032 + plan `.cursor/plans/admin-settings-and-permissions_6df9da97.pl
 |---------|------|--------|-----------|---------|
 | P13-01 | Cursor engineering skills + issue-tracker setup | DONE (2026-04-29) | `.cursor/skills/`, `AGENTS.md`, `CONTEXT.md`, `docs/agents/`, `docs/tasks/P13-01.md` | Ported core engineering workflow skills for Cursor, configured GitHub issue tracking and default triage labels, and added a single-context domain glossary setup. |
 | P13-02 | Main webapp elements template pack | DONE (2026-05-04) | `docs/templates/main-webapp-elements/`, `docs/tasks/P13-02.md` | Added reusable architecture, audit, refactor, skill docs, and local `reference/` source copies for recreating the Dashboard app shell, navigation, login/auth, changelog, settings/users page, and supporting FastAPI user-management backend. |
+
+---
+
+## Phase 14: Load-Data Portability & Import Production Hardening (DONE)
+
+**Objective:** Ship admin load-data transfer for cross-host migration and harden large ZIP import/export for production Docker deployments.
+
+Source: DEC-062, DEC-063, CHANGELOG 1.3.0–1.3.7.
+
+| Task ID | Task | Status | Key Files | Details |
+|---------|------|--------|-----------|---------|
+| P14-01 | Cross-user `data_version` sync + version label schema display | DONE (2026-05-19) | `server/routers/sync.py`, `client/src/hooks/use-data-version-sync.ts`, `client/src/components/layout/VersionLabel.tsx` | Poll `/sync/version`; header shows client/server versions and DB schema live vs target. |
+| P14-02 | Re-expose admin Load Data Transfer UI on Database page | DONE (2026-05-19) | `client/src/components/upload/DatabaseSection.tsx`, `DatabaseOperationModal.tsx`, `DatabaseSidePanel.tsx` | Export/import controls visible to admins; writers see upload only. Supersedes temporary hide (P5-31). |
+| P14-03 | Load-data-only portability semantics | DONE (2026-05-19) | `server/storage/database.py`, `server/services/export.py`, `tests/server/services/test_export_service.py` | Export/import processed load data only; preserve target users/config; exclude pending artifacts (DEC-062, DEC-063). |
+| P14-04 | Optimistic concurrency on event metadata (HTTP 409) | DONE (2026-05-19) | `server/services/query.py`, `server/routers/dashboard.py`, `server/models/dashboard.py` | Requires `if_unmodified_since` on single-event metadata updates. |
+| P14-05 | Production proxy + upload limits for large ZIPs | DONE (2026-05-19) | `Deployment/docker-compose.yml`, proxy config | Stream uploads through proxy; 60 GiB body limit; extended timeouts. |
+| P14-06 | Staging DB import + persisted task state | DONE (2026-05-19) | `server/services/export.py`, `data/tmp/parquet-tasks` | Load into `dashboard.db.staging`, atomic swap; tasks survive API restart; orphan cleanup on startup. |
+| P14-07 | Import progress UX + polling pause | DONE (2026-05-19) | `client/src/hooks/use-database-operation.ts`, `client/src/stores/ui-store.ts`, `use-data-version-sync.ts` | Backup/load/finalize phases; retry gateway errors; pause background sync during import. |
+| P14-08 | Docker healthcheck + resource tuning for imports | DONE (2026-05-19) | `Deployment/docker-compose.yml`, `server/routers/health.py` | `/health/live` during import; 12 GiB server mem_limit; DuckDB import memory/thread limits. |
+| P14-09 | Changelog page in production images | DONE (2026-05-19) | `client/src/app/changelog/page.tsx`, server Dockerfile | Bundle `CHANGELOG.md` at `/app/CHANGELOG.md`. |
+| P14-10 | Documentation refresh for 1.3.x operator workflow | DONE (2026-05-21) | `docs/prd.md`, `docs/notes/database.md`, `docs/architecture/deployment-and-scaling.md`, `Deployment/README.md` | Align product docs with load-data semantics and deployment constraints. |
+
+---
+
+## Phase 15: Damage Inspection (IN PROGRESS)
+
+**Objective:** Calculate per-event, per-channel fatigue damage from full-resolution RSP channel data.
+
+Source: `docs/brainstorm/09_damage_inspection`, DEC-064.
+
+| Task ID | Task | Status | Key Files | Details |
+|---------|------|--------|-----------|---------|
+| P15-01 | Inspect Damage vertical slice | DONE (2026-05-21) | `server/services/fatigue_damage.py`, `server/routers/damage.py`, `server/schema.yaml`, `client/src/app/inspect-damage/page.tsx`, `scripts/backfill-fatigue-channels.sh` | Extract notebook fatigue calculation into a pure service, store/query `Ch01`-`Ch21` full-resolution channels from DuckDB, add authenticated compute-on-read API, and wire the Inspect Damage side panel/table flow. |
+| P15-02 | Header-detected damage channels | DONE (2026-05-22) | `server/services/etl/transformer.py`, `server/services/ingestion.py`, `server/services/damage_backfill.py`, `client/src/app/inspect-damage/page.tsx` | Detect `P_UG_` force/moment channels from source headers, store cleaned labels with source-order `ChNN` keys, update reprocessing/backfill, and render Inspect Damage columns from API channel metadata. |
+| P15-03 | Lean plot-channel damage refactor | DONE (2026-05-22) | `server/services/damage_channels.py`, `server/services/query.py`, `server/services/ingestion.py`, `server/storage/data_backfills.py`, `client/src/app/inspect-damage/page.tsx` | Refactor Inspect Damage to derive 12 canonical damage columns from the existing plot channel map, query existing `measurements_raw.channel_name` rows, remove full-channel damage storage/backfill, and repair legacy generic channel-map names from retained previews. |
 
 ---
 

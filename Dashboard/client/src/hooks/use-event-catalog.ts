@@ -37,10 +37,16 @@ export function useEventCatalog() {
 
   const { allEvents, isLoading, error, refetch } = useAllEvents(requestFilters);
 
-  // Whitelist of events that pass the active dimension filters, used by
-  // useFilterSelectionSync to prune selected_event_ids when filters change.
+  // Whitelist of selectable events that pass active dimension filters, used by
+  // dashboard workspace pruning. Keep non-selectable events visible in the UI,
+  // but never keep them in selected_event_ids.
   const dimensionFilteredEventIds = useMemo(
-    () => new Set(allEvents.map((e) => e.event_id)),
+    () =>
+      new Set(
+        allEvents
+          .filter((event) => event.selectable_for_plotting !== false)
+          .map((event) => event.event_id),
+      ),
     [allEvents],
   );
 

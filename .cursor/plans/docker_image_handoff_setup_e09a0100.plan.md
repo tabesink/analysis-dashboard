@@ -17,6 +17,10 @@ todos:
 isProject: false
 ---
 
+> Superseded: this is historical planning context only. Current release and
+> deployment guidance lives in `AGENT.md` and `Deployment/README.md`; release
+> archives are produced by `Deployment/release.sh`.
+
 # Docker Image Handoff Plan
 
 ## Goal

@@ -2,29 +2,101 @@
 
 import json
 import logging
-import os
 import re
 import shutil
 import threading
-import uuid
+import importlib
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import pandas as pd
+duckdb = importlib.import_module("duckdb")
 
-from server.utils.boolean_filters import build_boolean_filter_condition
-from server.utils.weight_filters import build_weight_range_condition
+from server.modules.filter_semantics import build_filter_plan
 
+from .repositories import SessionsRepository, UsersRepository
+from .data_backfills import apply_startup_backfills
+from .schema_applier import SchemaApplier
 from .schema_loader import SchemaLoader, get_schema_loader
 
 logger = logging.getLogger(__name__)
 
 # (table_name, current_table_index_1_based, total_tables)
 ParquetProgressFn = Callable[[str | None, int, int], None]
+
+# (sub_phase, progress_message, current_step, total_steps, current_table)
+ImportProgressFn = Callable[[str, str, int, int, str | None], None]
+
+_BACKUP_COPY_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+def _copy_file_with_progress(
+    src: Path,
+    dst: Path,
+    total_bytes: int,
+    on_chunk: Callable[[int, int], None] | None,
+) -> None:
+    if total_bytes <= 0:
+        return
+    copied = 0
+    with open(src, "rb") as src_f, open(dst, "wb") as dst_f:
+        while True:
+            data = src_f.read(_BACKUP_COPY_CHUNK_BYTES)
+            if not data:
+                break
+            dst_f.write(data)
+            copied += len(data)
+            if on_chunk:
+                on_chunk(copied, total_bytes)
+
+LOAD_DATA_TABLES: tuple[str, ...] = (
+    "dim_program",
+    "dim_event",
+    "dim_channel_map",
+    "ingestion_artifacts",
+    "measurements_raw",
+    "measurements_lttb",
+    "event_custom_field_values",
+)
+
+LOAD_DATA_PORTABILITY_TABLES: tuple[str, ...] = tuple(
+    table for table in LOAD_DATA_TABLES if table != "ingestion_artifacts"
+)
+
+LOAD_DATA_DELETE_ORDER: tuple[str, ...] = (
+    "event_custom_field_values",
+    "measurements_raw",
+    "measurements_lttb",
+    "ingestion_artifacts",
+    "dim_channel_map",
+    "dim_event",
+    "dim_program",
+)
+
+LOAD_DATA_SEQUENCE_TABLES: dict[str, tuple[str, str]] = {
+    "seq_channel_map_id": ("dim_channel_map", "id"),
+    "seq_ingestion_artifact_id": ("ingestion_artifacts", "artifact_id"),
+    "seq_meas_raw_id": ("measurements_raw", "id"),
+    "seq_meas_lttb_id": ("measurements_lttb", "id"),
+    "seq_event_custom_field_value_id": ("event_custom_field_values", "id"),
+}
+
+PRESERVED_PORTABILITY_TABLES: frozenset[str] = frozenset(
+    {
+        "users",
+        "sessions",
+        "upload_tasks",
+        "saved_filters",
+        "user_preferences",
+        "audit_log",
+        "event_access_log",
+        "custom_field_definitions",
+        "custom_field_allowed_values",
+    }
+)
 
 
 def _quote_duck_ident(name: str) -> str:
@@ -136,7 +208,13 @@ class UnifiedStore:
     This design enables portability via Parquet export/import (zstd) or file copy.
     """
 
-    def __init__(self, db_path: Path, schema_loader: SchemaLoader | None = None):
+    def __init__(
+        self,
+        db_path: Path,
+        schema_loader: SchemaLoader | None = None,
+        *,
+        initialize_schema: bool = True,
+    ):
         self.db_path = db_path.resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._connection: duckdb.DuckDBPyConnection | None = None
@@ -144,7 +222,11 @@ class UnifiedStore:
         self._tls = threading.local()
         self._read_proxy = _GuardedConnection(self)
         self._schema_loader = schema_loader or get_schema_loader()
-        self._init_schema()
+        self._users_repository = UsersRepository(self)
+        self._sessions_repository = SessionsRepository(self)
+        if initialize_schema:
+            self._init_schema()
+        logger.info(f"Unified database initialized: {self.db_path}")
 
     def _ensure_connection_unlocked(self) -> None:
         """Open the shared connection; caller must hold ``_db_lock``."""
@@ -157,7 +239,11 @@ class UnifiedStore:
         return self._read_proxy
 
     @contextmanager
-    def write_connection(self) -> Generator[duckdb.DuckDBPyConnection, None, None]:
+    def write_connection(
+        self,
+        *,
+        bump_data_version: bool = True,
+    ) -> Generator[duckdb.DuckDBPyConnection, None, None]:
         """
         Exclusive write transaction on the shared connection.
 
@@ -174,6 +260,8 @@ class UnifiedStore:
             try:
                 conn.begin()
                 yield conn
+                if bump_data_version:
+                    self._increment_data_version_unlocked(conn)
                 conn.commit()
             except Exception:
                 try:
@@ -182,448 +270,28 @@ class UnifiedStore:
                     pass
                 raise
 
+    def _increment_data_version_unlocked(self, conn: duckdb.DuckDBPyConnection) -> None:
+        """Bump monotonic data_version in schema metadata inside active tx."""
+        conn.execute(
+            """
+            INSERT INTO _schema_metadata (key, value, updated_at)
+            VALUES ('data_version', '1', now())
+            ON CONFLICT (key) DO UPDATE SET
+                value = CAST(COALESCE(TRY_CAST(_schema_metadata.value AS BIGINT), 0) + 1 AS VARCHAR),
+                updated_at = now()
+            """
+        )
+
     def _init_schema(self) -> None:
         """Create all tables if they don't exist."""
         with self.write_connection() as conn:
-            # ===== SEQUENCES FROM SCHEMA.YAML =====
-            for seq_sql in self._schema_loader.generate_all_sequence_sql():
-                conn.execute(seq_sql)
-            
-            # ===== ADDITIONAL SEQUENCES (not in schema.yaml yet) =====
-            conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_channel_map_id START 1")
-            conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_meas_raw_id START 1")
-            conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_custom_field_value_id START 1")
-            conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_event_custom_field_value_id START 1")
-            conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_ingestion_artifact_id START 1")
+            SchemaApplier(self._schema_loader).apply(conn)
+            apply_startup_backfills(conn)
 
-            # ===== TABLES FROM SCHEMA.YAML =====
-            # dim_program and dim_event are loaded from schema.yaml
-            for table_name, table_def in self._schema_loader.tables.items():
-                table_sql = self._schema_loader.generate_table_sql(table_name, table_def)
-                conn.execute(table_sql)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS dim_channel_map (
-                    id BIGINT PRIMARY KEY DEFAULT nextval('seq_channel_map_id'),
-                    program_id VARCHAR NOT NULL,
-                    version VARCHAR NOT NULL,
-                    plot_key VARCHAR NOT NULL,
-                    x_col INTEGER,
-                    y_col INTEGER,
-                    x_channel VARCHAR NOT NULL,
-                    y_channel VARCHAR NOT NULL,
-                    plot_order INTEGER DEFAULT 0,
-                    x_scale_factor DOUBLE DEFAULT 1.0,
-                    y_scale_factor DOUBLE DEFAULT 1.0,
-                    x_unit VARCHAR,
-                    y_unit VARCHAR,
-                    UNIQUE (program_id, version, plot_key)
-                )
-            """)
-            conn.execute("ALTER TABLE dim_channel_map ADD COLUMN IF NOT EXISTS x_col INTEGER")
-            conn.execute("ALTER TABLE dim_channel_map ADD COLUMN IF NOT EXISTS y_col INTEGER")
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS ingestion_artifacts (
-                    artifact_id BIGINT PRIMARY KEY DEFAULT nextval('seq_ingestion_artifact_id'),
-                    program_id VARCHAR NOT NULL,
-                    version VARCHAR NOT NULL,
-                    source_file VARCHAR NOT NULL,
-                    artifact_path VARCHAR NOT NULL,
-                    artifact_kind VARCHAR NOT NULL,
-                    file_hash VARCHAR NOT NULL,
-                    row_count INTEGER DEFAULT 0,
-                    column_count INTEGER DEFAULT 0,
-                    preview_json JSON,
-                    metadata_json JSON,
-                    custom_fields_json JSON,
-                    status VARCHAR NOT NULL DEFAULT 'pending',
-                    error VARCHAR,
-                    event_id VARCHAR,
-                    owner_user_id VARCHAR,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (program_id, version, file_hash)
-                )
-            """)
-            conn.execute(
-                "ALTER TABLE ingestion_artifacts ADD COLUMN IF NOT EXISTS column_count INTEGER DEFAULT 0"
-            )
-            conn.execute(
-                "ALTER TABLE ingestion_artifacts ADD COLUMN IF NOT EXISTS preview_json JSON"
-            )
-            conn.execute(
-                "ALTER TABLE ingestion_artifacts ADD COLUMN IF NOT EXISTS metadata_json JSON"
-            )
-            conn.execute(
-                "ALTER TABLE ingestion_artifacts ADD COLUMN IF NOT EXISTS custom_fields_json JSON"
-            )
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS audit_log (
-                    id BIGINT PRIMARY KEY DEFAULT nextval('seq_audit_log_id'),
-                    action VARCHAR NOT NULL,
-                    user_id VARCHAR,
-                    event_id VARCHAR,
-                    details JSON,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id VARCHAR PRIMARY KEY,
-                    username VARCHAR NOT NULL UNIQUE,
-                    role VARCHAR NOT NULL,
-                    password_hash VARCHAR,
-                    can_write BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_login_at TIMESTAMP,
-                    last_settings_visit_at TIMESTAMP
-                )
-            """)
-            # Idempotent migrations for already-deployed databases.
-            conn.execute(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS can_write BOOLEAN DEFAULT FALSE"
-            )
-            conn.execute(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_settings_visit_at TIMESTAMP"
-            )
-            conn.execute(
-                "UPDATE users SET can_write = TRUE WHERE role = 'admin' AND can_write IS NOT TRUE"
-            )
-
-            # ===== MEASUREMENT TABLES =====
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS measurements_raw (
-                    id BIGINT PRIMARY KEY DEFAULT nextval('seq_meas_raw_id'),
-                    event_id VARCHAR NOT NULL,
-                    timestamp DOUBLE NOT NULL,
-                    channel_name VARCHAR NOT NULL,
-                    value DOUBLE
-                )
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS measurements_lttb (
-                    id BIGINT PRIMARY KEY DEFAULT nextval('seq_meas_lttb_id'),
-                    event_id VARCHAR NOT NULL,
-                    plot_key VARCHAR NOT NULL,
-                    x FLOAT NOT NULL,
-                    y FLOAT NOT NULL
-                )
-            """)
-
-            # ===== USER STATE TABLES =====
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS sessions (
-                    session_id VARCHAR PRIMARY KEY,
-                    user_id VARCHAR,
-                    data_state JSON,
-                    baseline_state JSON,
-                    new_data_state JSON,
-                    global_filters JSON,
-                    rendered_event_ids JSON,
-                    ui_preferences JSON,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP,
-                    expires_at TIMESTAMP
-                )
-            """)
-            conn.execute("""
-                ALTER TABLE sessions
-                ADD COLUMN IF NOT EXISTS rendered_event_ids JSON
-            """)
-            conn.execute("""
-                ALTER TABLE sessions
-                ADD COLUMN IF NOT EXISTS user_id VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE sessions
-                ADD COLUMN IF NOT EXISTS data_state JSON
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS upload_tasks (
-                    task_id VARCHAR PRIMARY KEY,
-                    created_by_user_id VARCHAR NOT NULL,
-                    status VARCHAR NOT NULL,
-                    phase VARCHAR NOT NULL,
-                    completed_events INTEGER DEFAULT 0,
-                    total_events INTEGER DEFAULT 0,
-                    current_event VARCHAR,
-                    error VARCHAR,
-                    result_json JSON,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    expires_at TIMESTAMP NOT NULL
-                )
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS saved_filters (
-                    id BIGINT PRIMARY KEY DEFAULT nextval('seq_saved_filter_id'),
-                    user_id VARCHAR,
-                    name VARCHAR NOT NULL,
-                    data_state JSON,
-                    baseline_state JSON,
-                    new_data_state JSON,
-                    global_filters JSON,
-                    is_default BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            conn.execute("""
-                ALTER TABLE saved_filters
-                ADD COLUMN IF NOT EXISTS data_state JSON
-            """)
-            conn.execute("""
-                ALTER TABLE saved_filters
-                ADD COLUMN IF NOT EXISTS user_id VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS uploaded_by_user_id VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS last_updated_by_user_id VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS phase VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS rfq BOOLEAN
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS dv BOOLEAN
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS pv BOOLEAN
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS post_prod BOOLEAN
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS gvw VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS fgawr VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS fgawr_range_lbs VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS rgawr VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS rgawr_range_lbs VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS material_construction VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS job_number VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS work_order VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS damper_type VARCHAR
-            """)
-            conn.execute("""
-                ALTER TABLE dim_event
-                ADD COLUMN IF NOT EXISTS status VARCHAR
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS user_preferences (
-                    user_id VARCHAR PRIMARY KEY DEFAULT 'default',
-                    pinned_baseline_event_id VARCHAR,
-                    default_program_id VARCHAR,
-                    grid_columns INTEGER DEFAULT 3,
-                    grid_layout_order JSON,
-                    theme VARCHAR DEFAULT 'light',
-                    baseline_opacity FLOAT DEFAULT 0.5,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP
-                )
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS event_access_log (
-                    id BIGINT PRIMARY KEY DEFAULT nextval('seq_event_access_id'),
-                    event_id VARCHAR NOT NULL,
-                    access_type VARCHAR NOT NULL,
-                    partition VARCHAR,
-                    accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS custom_field_definitions (
-                    field_key VARCHAR PRIMARY KEY,
-                    display_name VARCHAR NOT NULL UNIQUE,
-                    data_type VARCHAR NOT NULL DEFAULT 'string',
-                    is_filterable BOOLEAN DEFAULT TRUE,
-                    created_by_user_id VARCHAR,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP
-                )
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS custom_field_allowed_values (
-                    id BIGINT PRIMARY KEY DEFAULT nextval('seq_custom_field_value_id'),
-                    field_key VARCHAR NOT NULL,
-                    program_id VARCHAR NOT NULL,
-                    value VARCHAR NOT NULL,
-                    sort_order INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (field_key, program_id, value)
-                )
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS event_custom_field_values (
-                    id BIGINT PRIMARY KEY DEFAULT nextval('seq_event_custom_field_value_id'),
-                    event_id VARCHAR NOT NULL,
-                    field_key VARCHAR NOT NULL,
-                    value VARCHAR NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (event_id, field_key)
-                )
-            """)
-
-            # ===== SCHEMA METADATA TABLE =====
-            # Stores schema info for portability - enables runtime schema discovery
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS _schema_metadata (
-                    key VARCHAR PRIMARY KEY,
-                    value JSON,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            # ===== INDEXES =====
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_program ON dim_event(program_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_version ON dim_event(program_id, version)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_status ON dim_event(status)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_deleted ON dim_event(is_deleted)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_file_hash ON dim_event(file_hash)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_channel_map ON dim_channel_map(program_id, version)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_meas_raw_event ON measurements_raw(event_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_meas_raw_event_channel "
-                "ON measurements_raw(event_id, channel_name)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_meas_lttb_event "
-                "ON measurements_lttb(event_id, plot_key)"
-            )
-            # Covering index for bulk LTTB queries (enables index-only scans)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_meas_lttb_covering "
-                "ON measurements_lttb(plot_key, event_id, x, y)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_upload_tasks_user ON upload_tasks(created_by_user_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_upload_tasks_expires ON upload_tasks(expires_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_uploaded_by_user ON dim_event(uploaded_by_user_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_saved_filters_user ON saved_filters(user_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_access_recent "
-                "ON event_access_log(accessed_at DESC)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_custom_field_definitions_filterable "
-                "ON custom_field_definitions(is_filterable)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_custom_field_allowed_values_lookup "
-                "ON custom_field_allowed_values(field_key, program_id, sort_order)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_custom_field_values_event "
-                "ON event_custom_field_values(event_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_custom_field_values_field "
-                "ON event_custom_field_values(field_key, value)"
-            )
-            # Backfill legacy data after index creation. DuckDB can reject CREATE INDEX
-            # if DML updates are outstanding earlier in the same transaction.
-            maturity_column_exists = conn.execute(
-                """
-                SELECT COUNT(*)
-                FROM information_schema.columns
-                WHERE table_name = 'dim_event' AND column_name = 'maturity'
-                """
-            ).fetchone()[0] > 0
-            if maturity_column_exists:
-                conn.execute("""
-                    UPDATE dim_event
-                    SET status = maturity
-                    WHERE status IS NULL AND maturity IS NOT NULL
-                """)
-            conn.execute("""
-                UPDATE dim_event
-                SET
-                    rfq = COALESCE(rfq, FALSE),
-                    dv = COALESCE(dv, FALSE),
-                    pv = COALESCE(pv, FALSE),
-                    post_prod = COALESCE(post_prod, FALSE)
-                WHERE
-                    rfq IS NULL
-                    OR dv IS NULL
-                    OR pv IS NULL
-                    OR post_prod IS NULL
-            """)
-
-        logger.info(f"Unified database initialized: {self.db_path}")
+    def apply_startup_backfills(self) -> None:
+        """Apply startup row-level backfills against the current database."""
+        with self.write_connection() as conn:
+            apply_startup_backfills(conn)
 
     # ===== PROGRAM OPERATIONS =====
 
@@ -631,25 +299,11 @@ class UnifiedStore:
 
     def get_user_by_id(self, user_id: str) -> dict[str, Any] | None:
         """Get user by internal ID."""
-        result = self.read_connection.execute(
-            "SELECT * FROM users WHERE id = ?",
-            [user_id],
-        ).fetchone()
-        if result is None:
-            return None
-        columns = [desc[0] for desc in self.read_connection.description]
-        return dict(zip(columns, result))
+        return self._users_repository.get_user_by_id(user_id)
 
     def get_user_by_username(self, username: str) -> dict[str, Any] | None:
         """Get user by username."""
-        result = self.read_connection.execute(
-            "SELECT * FROM users WHERE username = ?",
-            [username],
-        ).fetchone()
-        if result is None:
-            return None
-        columns = [desc[0] for desc in self.read_connection.description]
-        return dict(zip(columns, result))
+        return self._users_repository.get_user_by_username(username)
 
     def create_user(
         self,
@@ -659,37 +313,20 @@ class UnifiedStore:
         can_write: bool = False,
     ) -> dict[str, Any]:
         """Create a user record and return it."""
-        user_id = str(uuid.uuid4())
-        effective_can_write = True if role == "admin" else can_write
-        with self.write_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO users (id, username, role, password_hash, can_write)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                [user_id, username, role, password_hash, effective_can_write],
-            )
-        user = self.get_user_by_id(user_id)
-        if user is None:
-            msg = f"Failed to create user: {username}"
-            raise RuntimeError(msg)
-        return user
+        return self._users_repository.create_user(
+            username=username,
+            role=role,
+            password_hash=password_hash,
+            can_write=can_write,
+        )
 
     def update_user_last_login(self, user_id: str) -> None:
         """Update user's last login timestamp."""
-        with self.write_connection() as conn:
-            conn.execute(
-                "UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?",
-                [user_id],
-            )
+        self._users_repository.update_user_last_login(user_id)
 
     def list_users(self) -> list[dict[str, Any]]:
         """Return all users ordered by created_at."""
-        result = self.read_connection.execute(
-            "SELECT * FROM users ORDER BY created_at ASC, username ASC"
-        ).fetchall()
-        columns = [desc[0] for desc in self.read_connection.description]
-        return [dict(zip(columns, row)) for row in result]
+        return self._users_repository.list_users()
 
     def update_user_role_and_write(
         self,
@@ -698,40 +335,19 @@ class UnifiedStore:
         can_write: bool | None = None,
     ) -> dict[str, Any] | None:
         """Patch role and/or can_write. Admin role implies can_write=TRUE."""
-        existing = self.get_user_by_id(user_id)
-        if existing is None:
-            return None
-        new_role = role if role is not None else existing["role"]
-        if new_role == "admin":
-            new_can_write = True
-        elif can_write is not None:
-            new_can_write = can_write
-        else:
-            new_can_write = bool(existing.get("can_write"))
-        with self.write_connection() as conn:
-            conn.execute(
-                "UPDATE users SET role = ?, can_write = ? WHERE id = ?",
-                [new_role, new_can_write, user_id],
-            )
-        return self.get_user_by_id(user_id)
+        return self._users_repository.update_user_role_and_write(
+            user_id=user_id,
+            role=role,
+            can_write=can_write,
+        )
 
     def set_user_password_hash(self, user_id: str, password_hash: str) -> bool:
         """Replace the user's password hash. Returns True if a row was updated."""
-        with self.write_connection() as conn:
-            conn.execute(
-                "UPDATE users SET password_hash = ? WHERE id = ?",
-                [password_hash, user_id],
-            )
-        return self.get_user_by_id(user_id) is not None
+        return self._users_repository.set_user_password_hash(user_id, password_hash)
 
     def delete_user(self, user_id: str) -> bool:
         """Hard delete a user row. Returns True if a row was removed."""
-        existing = self.get_user_by_id(user_id)
-        if existing is None:
-            return False
-        with self.write_connection() as conn:
-            conn.execute("DELETE FROM users WHERE id = ?", [user_id])
-        return True
+        return self._users_repository.delete_user(user_id)
 
     def count_users_created_after(
         self,
@@ -739,22 +355,15 @@ class UnifiedStore:
         exclude_user_id: str,
     ) -> int:
         """Count users created after a timestamp, excluding the caller."""
-        if after is None:
-            sql = "SELECT COUNT(*) FROM users WHERE id != ?"
-            params: list[Any] = [exclude_user_id]
-        else:
-            sql = "SELECT COUNT(*) FROM users WHERE id != ? AND created_at > ?"
-            params = [exclude_user_id, after]
-        row = self.read_connection.execute(sql, params).fetchone()
-        return int(row[0]) if row and row[0] is not None else 0
+        return self._users_repository.count_users_created_after(after, exclude_user_id)
 
     def mark_user_settings_visited(self, user_id: str) -> None:
         """Stamp last_settings_visit_at = now() for an admin."""
-        with self.write_connection() as conn:
-            conn.execute(
-                "UPDATE users SET last_settings_visit_at = CURRENT_TIMESTAMP WHERE id = ?",
-                [user_id],
-            )
+        self._users_repository.mark_user_settings_visited(user_id)
+
+    def bump_user_token_version(self, user_id: str) -> int:
+        """Increment token_version for a user and return the new value."""
+        return self._users_repository.bump_token_version(user_id)
 
     def get_program_ids(
         self,
@@ -781,30 +390,14 @@ class UnifiedStore:
         
         # Apply global filters for bidirectional filtering
         if global_filters:
-            event_id_query = global_filters.get("event_id_query")
-            if isinstance(event_id_query, str) and event_id_query.strip():
-                conditions.append("LOWER(event_id) LIKE ?")
-                params.append(f"%{event_id_query.strip().lower()}%")
-
-            for filter_key, filter_values in global_filters.items():
-                if filter_key == "event_id_query":
-                    continue
-                if isinstance(filter_values, list) and filter_values:
-                    boolean_condition = build_boolean_filter_condition(filter_key, filter_values)
-                    if boolean_condition is not None:
-                        condition_sql, condition_params = boolean_condition
-                        conditions.append(condition_sql)
-                        params.extend(condition_params)
-                        continue
-                    weight_condition = build_weight_range_condition(filter_key, filter_values)
-                    if weight_condition is not None:
-                        condition_sql, condition_params = weight_condition
-                        conditions.append(condition_sql)
-                        params.extend(condition_params)
-                        continue
-                    placeholders = ", ".join(["?"] * len(filter_values))
-                    conditions.append(f"{filter_key} IN ({placeholders})")
-                    params.extend(filter_values)
+            filter_plan = build_filter_plan(
+                filters=global_filters,
+                purpose="program_list",
+                filter_column_map=get_schema_loader().get_filter_column_map(),
+            )
+            for condition in filter_plan.conditions:
+                conditions.append(condition.sql)
+                params.extend(condition.params)
         
         where_clause = " AND ".join(conditions)
         query = f"""
@@ -885,30 +478,14 @@ class UnifiedStore:
         
         # Apply global filters for bidirectional filtering
         if global_filters:
-            event_id_query = global_filters.get("event_id_query")
-            if isinstance(event_id_query, str) and event_id_query.strip():
-                conditions.append("LOWER(event_id) LIKE ?")
-                params.append(f"%{event_id_query.strip().lower()}%")
-
-            for filter_key, filter_values in global_filters.items():
-                if filter_key == "event_id_query":
-                    continue
-                if isinstance(filter_values, list) and filter_values:
-                    boolean_condition = build_boolean_filter_condition(filter_key, filter_values)
-                    if boolean_condition is not None:
-                        condition_sql, condition_params = boolean_condition
-                        conditions.append(condition_sql)
-                        params.extend(condition_params)
-                        continue
-                    weight_condition = build_weight_range_condition(filter_key, filter_values)
-                    if weight_condition is not None:
-                        condition_sql, condition_params = weight_condition
-                        conditions.append(condition_sql)
-                        params.extend(condition_params)
-                        continue
-                    placeholders = ", ".join(["?"] * len(filter_values))
-                    conditions.append(f"{filter_key} IN ({placeholders})")
-                    params.extend(filter_values)
+            filter_plan = build_filter_plan(
+                filters=global_filters,
+                purpose="version_list",
+                filter_column_map=get_schema_loader().get_filter_column_map(),
+            )
+            for condition in filter_plan.conditions:
+                conditions.append(condition.sql)
+                params.extend(condition.params)
         
         where_clause = " AND ".join(conditions)
         query = f"""
@@ -1003,6 +580,47 @@ class UnifiedStore:
                 f"UPDATE dim_event SET {set_clause} WHERE event_id = ?",
                 values + [event_id],
             )
+
+    def update_event_if_unmodified(
+        self,
+        event_id: str,
+        *,
+        if_unmodified_since: str | None,
+        **kwargs: Any,
+    ) -> bool:
+        """Update event metadata only when current updated_at matches expected value."""
+        if not kwargs:
+            return True
+        with self.write_connection() as conn:
+            kwargs["updated_at"] = "CURRENT_TIMESTAMP"
+            set_clause = ", ".join(
+                f"{key} = CURRENT_TIMESTAMP" if key == "updated_at" else f"{key} = ?"
+                for key in kwargs.keys()
+            )
+            values = [value for key, value in kwargs.items() if key != "updated_at"]
+
+            if if_unmodified_since is None:
+                updated = conn.execute(
+                    f"""
+                    UPDATE dim_event
+                    SET {set_clause}
+                    WHERE event_id = ? AND is_deleted = false AND updated_at IS NULL
+                    RETURNING event_id
+                    """,
+                    values + [event_id],
+                ).fetchone()
+            else:
+                updated = conn.execute(
+                    f"""
+                    UPDATE dim_event
+                    SET {set_clause}
+                    WHERE event_id = ? AND is_deleted = false AND updated_at = CAST(? AS TIMESTAMP)
+                    RETURNING event_id
+                    """,
+                    values + [event_id, if_unmodified_since],
+                ).fetchone()
+
+            return updated is not None
 
     def update_program_version_events(self, program_id: str, version: str, **kwargs: Any) -> int:
         """Batch update metadata for all non-deleted events in a program/version."""
@@ -1588,15 +1206,17 @@ class UnifiedStore:
         """
         Insert raw measurements from a DataFrame.
 
-        Expected columns: timestamp, channel_name, value
+        Expected columns: timestamp, channel_name, value.
         Returns: Number of rows inserted
         """
         with self.write_connection() as conn:
             df_copy = df.copy()
             df_copy["event_id"] = event_id
             conn.execute("""
-                INSERT INTO measurements_raw (event_id, timestamp, channel_name, value)
-                SELECT event_id, timestamp, channel_name, value FROM df_copy
+                INSERT INTO measurements_raw
+                    (event_id, timestamp, channel_name, value)
+                SELECT event_id, timestamp, channel_name, value
+                FROM df_copy
             """)
             return len(df_copy)
 
@@ -1607,7 +1227,14 @@ class UnifiedStore:
     ) -> pd.DataFrame:
         """Get raw measurements for events."""
         if not event_ids:
-            return pd.DataFrame(columns=["event_id", "timestamp", "channel_name", "value"])
+            return pd.DataFrame(
+                columns=[
+                    "event_id",
+                    "timestamp",
+                    "channel_name",
+                    "value",
+                ]
+            )
 
         placeholders = ", ".join(["?"] * len(event_ids))
         if channel_names:
@@ -1721,62 +1348,15 @@ class UnifiedStore:
 
     def get_session(self, session_id: str, user_id: str | None = None) -> dict[str, Any] | None:
         """Get session by ID, optionally scoped to a user."""
-        query = "SELECT * FROM sessions WHERE session_id = ?"
-        params: list[Any] = [session_id]
-        if user_id is not None:
-            query += " AND user_id = ?"
-            params.append(user_id)
-        result = self.read_connection.execute(query, params).fetchone()
-        if result is None:
-            return None
-        columns = [desc[0] for desc in self.read_connection.description]
-        return dict(zip(columns, result))
+        return self._sessions_repository.get_session(session_id, user_id)
 
     def upsert_session(self, session_id: str, data: dict[str, Any]) -> None:
         """Insert or update session."""
-        import json
-
-        def to_json(value: Any) -> str | None:
-            """Convert value to JSON string, or None if value is None."""
-            return json.dumps(value) if value is not None else None
-
-        with self.write_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO sessions (session_id, user_id, data_state,
-                                       global_filters, rendered_event_ids, ui_preferences, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (session_id) DO UPDATE SET
-                    user_id = COALESCE(EXCLUDED.user_id, sessions.user_id),
-                    data_state = EXCLUDED.data_state,
-                    global_filters = EXCLUDED.global_filters,
-                    rendered_event_ids = EXCLUDED.rendered_event_ids,
-                    ui_preferences = EXCLUDED.ui_preferences,
-                    updated_at = now(),
-                    expires_at = EXCLUDED.expires_at
-                """,
-                [
-                    session_id,
-                    data.get("user_id"),
-                    to_json(data.get("data_state")),
-                    to_json(data.get("global_filters")),
-                    to_json(data.get("rendered_event_ids")),
-                    to_json(data.get("ui_preferences")),
-                    data.get("expires_at"),
-                ],
-            )
+        self._sessions_repository.upsert_session(session_id, data)
 
     def delete_session(self, session_id: str, user_id: str | None = None) -> bool:
         """Delete session, optionally scoped to user."""
-        with self.write_connection() as conn:
-            query = "DELETE FROM sessions WHERE session_id = ?"
-            params: list[Any] = [session_id]
-            if user_id is not None:
-                query += " AND user_id = ?"
-                params.append(user_id)
-            query += " RETURNING session_id"
-            result = conn.execute(query, params).fetchone()
-            return result is not None
+        return self._sessions_repository.delete_session(session_id, user_id)
 
     # ===== UPLOAD TASK OPERATIONS =====
 
@@ -2122,13 +1702,71 @@ class UnifiedStore:
         except duckdb.Error:
             return False
 
+    def get_data_version(self) -> int:
+        """Return monotonic data_version used for cache coordination."""
+        row = self.read_connection.execute(
+            "SELECT value FROM _schema_metadata WHERE key = 'data_version'"
+        ).fetchone()
+        if row is None or row[0] is None:
+            return 0
+        if isinstance(row[0], (bytes, bytearray, memoryview)):
+            raw = bytes(row[0]).decode("utf-8")
+        else:
+            raw = str(row[0])
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 0
+
     # ===== LIFECYCLE =====
 
     def vacuum(self) -> None:
         """Reclaim disk space from deleted records."""
-        with self.write_connection() as conn:
+        with self.write_connection(bump_data_version=False) as conn:
             conn.execute("VACUUM")
         logger.info("Database vacuumed")
+
+    def _apply_duckdb_session_tuning(
+        self,
+        *,
+        memory_limit: str,
+        threads: int,
+        temp_directory: Path | None = None,
+    ) -> None:
+        with self._db_lock:
+            self._ensure_connection_unlocked()
+            if self._connection is None:
+                return
+            if temp_directory is not None:
+                temp_directory.mkdir(parents=True, exist_ok=True)
+                escaped = str(temp_directory).replace("'", "''")
+                self._connection.execute(f"SET temp_directory='{escaped}'")
+            self._connection.execute(f"SET memory_limit='{memory_limit}'")
+            self._connection.execute(f"SET threads={int(threads)}")
+            self._connection.execute("SET preserve_insertion_order=false")
+
+    def configure_live_session_for_background_import(
+        self,
+        *,
+        memory_limit: str = "1GB",
+        threads: int = 1,
+    ) -> None:
+        """Reduce live-connection memory while a staging Parquet import runs."""
+        self._apply_duckdb_session_tuning(memory_limit=memory_limit, threads=threads)
+
+    def configure_bulk_import_session(
+        self,
+        *,
+        memory_limit: str = "10GB",
+        threads: int = 1,
+    ) -> None:
+        """Tune DuckDB for large Parquet loads (staging import file only)."""
+        temp_dir = self.db_path.parent / "tmp" / "duckdb-import"
+        self._apply_duckdb_session_tuning(
+            memory_limit=memory_limit,
+            threads=threads,
+            temp_directory=temp_dir,
+        )
 
     def close(self) -> None:
         """Checkpoint and close the shared connection (no dangling FD before file replace)."""
@@ -2156,30 +1794,33 @@ class UnifiedStore:
         on_progress: ParquetProgressFn | None = None,
     ) -> None:
         """
-        Export all user tables to Parquet (zstd) plus schema.sql and load.sql.
+        Export load-data tables to Parquet (zstd) plus schema.sql and load.sql.
 
-        The directory can be zipped for portable import. Paths in load.sql are
-        relative to the export directory (import uses chdir to that folder).
+        The directory can be zipped for portable import. Auth, session, audit,
+        saved-filter, and admin custom-field configuration tables are target-local
+        and are intentionally excluded.
         """
         export_dir.mkdir(parents=True, exist_ok=True)
         self.update_schema_metadata()
 
-        with self.write_connection() as conn:
+        with self.write_connection(bump_data_version=False) as conn:
             conn.execute("CHECKPOINT")
-            rows = conn.execute(
+            existing_rows = conn.execute(
                 """
                 SELECT table_name
                 FROM information_schema.tables
                 WHERE table_schema = 'main' AND table_type = 'BASE TABLE'
-                ORDER BY table_name
                 """
             ).fetchall()
-            user_tables = [r[0] for r in rows]
-            total = len(user_tables)
+            existing_tables = {r[0] for r in existing_rows}
+            export_tables = [
+                table for table in LOAD_DATA_PORTABILITY_TABLES if table in existing_tables
+            ]
+            total = len(export_tables)
             if on_progress:
                 on_progress(None, 0, total)
 
-            for i, table in enumerate(user_tables):
+            for i, table in enumerate(export_tables):
                 out_p = export_dir / f"{table}.parquet"
                 ident = _quote_duck_ident(table)
                 conn.execute(
@@ -2189,13 +1830,37 @@ class UnifiedStore:
                 if on_progress:
                     on_progress(table, i + 1, total)
 
-            schema_parts: list[str] = []
-            for (seq_sql,) in conn.execute("SELECT sql FROM duckdb_sequences()").fetchall():
-                s = seq_sql.strip().rstrip(";")
-                s = _normalize_create_sequence_sql(s)
-                schema_parts.append(s + ";;\n")
+            if "_schema_metadata" in existing_tables:
+                conn.execute(
+                    """
+                    COPY (SELECT * FROM _schema_metadata) TO ?
+                    (FORMAT PARQUET, COMPRESSION ZSTD)
+                    """,
+                    [str(export_dir / "_schema_metadata.parquet")],
+                )
 
-            for table in user_tables:
+            schema_parts: list[str] = []
+            sequence_names = tuple(
+                sequence_name
+                for sequence_name, (table_name, _) in LOAD_DATA_SEQUENCE_TABLES.items()
+                if table_name in export_tables
+            )
+            sequence_placeholders = ", ".join(["?"] * len(sequence_names))
+            if sequence_names:
+                for (seq_sql,) in conn.execute(
+                    f"""
+                    SELECT sql
+                    FROM duckdb_sequences()
+                    WHERE sequence_name IN ({sequence_placeholders})
+                    ORDER BY sequence_name
+                    """,
+                    list(sequence_names),
+                ).fetchall():
+                    s = seq_sql.strip().rstrip(";")
+                    s = _normalize_create_sequence_sql(s)
+                    schema_parts.append(s + ";;\n")
+
+            for table in export_tables:
                 row = conn.execute(
                     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
                     [table],
@@ -2204,12 +1869,14 @@ class UnifiedStore:
                     s = row[0].strip().rstrip(";")
                     schema_parts.append(s + ";;\n")
 
+            index_placeholders = ", ".join(["?"] * len(export_tables))
             for (idx_sql,) in conn.execute(
-                """
+                f"""
                 SELECT sql FROM sqlite_master
-                WHERE type = 'index' AND sql IS NOT NULL
+                WHERE type = 'index' AND sql IS NOT NULL AND tbl_name IN ({index_placeholders})
                 ORDER BY name
-                """
+                """,
+                export_tables,
             ).fetchall():
                 s = idx_sql.strip().rstrip(";")
                 schema_parts.append(s + ";;\n")
@@ -2217,7 +1884,7 @@ class UnifiedStore:
             (export_dir / "schema.sql").write_text("".join(schema_parts), encoding="utf-8")
 
             load_lines: list[str] = []
-            for table in user_tables:
+            for table in export_tables:
                 ident = _quote_duck_ident(table)
                 load_lines.append(
                     f"COPY {ident} FROM '{table}.parquet' "
@@ -2231,58 +1898,110 @@ class UnifiedStore:
         self,
         import_dir: Path,
         on_progress: ParquetProgressFn | None = None,
+        on_import_progress: ImportProgressFn | None = None,
+        *,
+        skip_backup: bool = False,
     ) -> dict[str, Any]:
         """
-        Replace the current database from an EXPORT-compatible directory
-        (schema.sql, load.sql, *.parquet).
+        Replace target load data from an EXPORT-compatible directory
+        (schema.sql, load.sql, load-data *.parquet).
 
-        Creates a backup of the existing database first, then runs schema DDL
-        and COPY statements with import_dir as the working directory so
-        relative parquet paths resolve.
+        Auth, session, audit, saved-filter, and admin custom-field configuration
+        tables stay in the target database. Load-data tables are cleared and
+        reloaded in per-table transactions so a failed import on a staging copy
+        does not require rolling back one giant transaction.
+
+        When ``skip_backup`` is true, the caller has already backed up the live
+        database (staging import path in ``ExportService``).
         """
         schema_path = import_dir / "schema.sql"
         load_path = import_dir / "load.sql"
         if not schema_path.is_file() or not load_path.is_file():
             raise ValueError("Import directory must contain schema.sql and load.sql")
 
-        with self._db_lock:
-            self.close()
+        load_text = load_path.read_text(encoding="utf-8")
+        copy_tables = [
+            table
+            for table in (_parse_copy_table(line) for line in load_text.splitlines())
+            if table is not None
+        ]
+        unexpected_tables = sorted(set(copy_tables) - set(LOAD_DATA_TABLES))
+        if unexpected_tables:
+            raise ValueError(
+                "Import load.sql contains non-load-data tables: "
+                + ", ".join(unexpected_tables)
+            )
+        preserved_exports = sorted(
+            table
+            for table in PRESERVED_PORTABILITY_TABLES
+            if (import_dir / f"{table}.parquet").is_file()
+        )
+        if preserved_exports:
+            raise ValueError(
+                "Import archive contains preserved target-local tables: "
+                + ", ".join(preserved_exports)
+            )
 
-            backup_path = self.db_path.with_suffix(".db.bak")
-            if self.db_path.exists():
-                shutil.copy2(self.db_path, backup_path)
+        missing_tables = [
+            table
+            for table in LOAD_DATA_PORTABILITY_TABLES
+            if not (import_dir / f"{table}.parquet").is_file()
+        ]
+        if missing_tables:
+            raise ValueError("Import archive is missing load-data tables: " + ", ".join(missing_tables))
 
-            if self.db_path.exists():
-                self.db_path.unlink()
+        legacy_total = len(LOAD_DATA_DELETE_ORDER) + len(LOAD_DATA_PORTABILITY_TABLES)
+        total_steps = legacy_total + 1 + (0 if skip_backup else 1)
+        current = 0
+        backup_path = self.db_path.with_suffix(".db.bak")
 
-            schema_text = _normalize_create_sequence_sql(schema_path.read_text(encoding="utf-8"))
-            load_text = load_path.read_text(encoding="utf-8")
-            copy_stmts = [
-                ln.strip()
-                for ln in load_text.splitlines()
-                if ln.strip() and ln.strip().upper().startswith("COPY")
-            ]
-            total = len(copy_stmts)
+        def report(sub_phase: str, message: str, table: str | None = None) -> None:
+            if on_import_progress:
+                on_import_progress(sub_phase, message, current, total_steps, table)
+            if on_progress and sub_phase in {"clearing", "loading"}:
+                on_progress(table, max(0, current - 1), legacy_total)
 
-            old_cwd = os.getcwd()
-            conn = duckdb.connect(str(self.db_path))
-            try:
-                os.chdir(import_dir)
-                conn.execute(schema_text)
-                if on_progress:
-                    on_progress(None, 0, total)
-                for i, stmt in enumerate(copy_stmts):
-                    conn.execute(stmt)
-                    tbl = _parse_copy_table(stmt)
-                    if on_progress:
-                        on_progress(tbl, i + 1, total)
-            finally:
-                os.chdir(old_cwd)
-                conn.close()
+        if not skip_backup:
+            report("backing_up", "Backing up current database…")
+            with self._db_lock:
+                self._ensure_connection_unlocked()
+                if self._connection is not None:
+                    self._connection.execute("CHECKPOINT")
+                if self.db_path.exists():
+                    total_bytes = self.db_path.stat().st_size
+                    if total_bytes > 0 and on_import_progress:
 
-            self._connection = None
-            self._init_schema()
-            self.update_schema_metadata()
+                        def on_backup_chunk(copied: int, total: int) -> None:
+                            pct = min(99, int(100 * copied / total)) if total else 0
+                            report("backing_up", f"Backing up database ({pct}%)…")
+
+                        _copy_file_with_progress(
+                            self.db_path, backup_path, total_bytes, on_backup_chunk
+                        )
+                    else:
+                        shutil.copy2(self.db_path, backup_path)
+            current = 1
+
+        if on_progress and not on_import_progress:
+            on_progress(None, current, legacy_total)
+
+        with self.write_connection() as conn:
+            for table in LOAD_DATA_DELETE_ORDER:
+                conn.execute(f"DELETE FROM {_quote_duck_ident(table)}")
+                current += 1
+                report("clearing", f"Clearing {table} ({current}/{total_steps})…", table)
+
+        for table in LOAD_DATA_PORTABILITY_TABLES:
+            with self.write_connection() as conn:
+                self._copy_parquet_table_into_live_table(
+                    conn, table, import_dir / f"{table}.parquet"
+                )
+            current += 1
+            report("loading", f"Loading {table} ({current}/{total_steps})…", table)
+
+        current = total_steps
+        report("finalizing", "Updating schema metadata…")
+        self.update_schema_metadata()
 
         event_count = self.read_connection.execute(
             "SELECT COUNT(*) FROM dim_event WHERE is_deleted = false"
@@ -2294,4 +2013,50 @@ class UnifiedStore:
             "size_mb": round(size_mb, 2),
             "backup_path": str(backup_path),
         }
+
+    def _copy_parquet_table_into_live_table(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        table: str,
+        parquet_path: Path,
+    ) -> None:
+        live_columns = [
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'main' AND table_name = ?
+                ORDER BY ordinal_position
+                """,
+                [table],
+            ).fetchall()
+        ]
+        conn.execute("SELECT * FROM read_parquet(?) LIMIT 0", [str(parquet_path)])
+        parquet_columns = {desc[0] for desc in conn.description}
+        generated_column = next(
+            (
+                sequence_column
+                for sequence_table, sequence_column in LOAD_DATA_SEQUENCE_TABLES.values()
+                if sequence_table == table
+            ),
+            None,
+        )
+        columns = [
+            column
+            for column in live_columns
+            if column in parquet_columns and column != generated_column
+        ]
+        if not columns:
+            raise ValueError(f"Import table {table} has no columns matching target schema")
+
+        column_list = ", ".join(_quote_duck_ident(column) for column in columns)
+        conn.execute(
+            f"""
+            INSERT INTO {_quote_duck_ident(table)} ({column_list})
+            SELECT {column_list}
+            FROM read_parquet(?)
+            """,
+            [str(parquet_path)],
+        )
 

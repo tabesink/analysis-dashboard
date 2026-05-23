@@ -158,8 +158,8 @@ export function GlobalFilters({
             ? 'bg-primary/10 text-primary'
             : 'text-muted-foreground hover:text-foreground hover:bg-accent'
         }`}
-        aria-label="Expand Global Filters section"
-        title="Global Filters"
+        aria-label="Expand Filter Data section"
+        title="Filter Data"
       >
         <Filter className="h-4 w-4" />
       </Button>
@@ -177,9 +177,15 @@ export function GlobalFilters({
     );
   }
 
+  const filterSectionSubtitle =
+    activeFilters.length === 0
+      ? 'No filters selected - all events are shown.'
+      : undefined;
+
   return (
     <SidePanelSection
-      title="Global Filters"
+      title="Filter Data"
+      subtitle={filterSectionSubtitle}
       defaultExpanded={false}
       forceExpanded={forceExpanded}
       persistentContent={

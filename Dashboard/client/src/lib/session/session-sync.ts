@@ -32,12 +32,20 @@ const DEFAULT_SESSION_STATE: Omit<SessionState, 'session_id'> = {
   data_state: { program_ids: [], versions: [], selected_event_ids: [] },
   global_filters: {},
   rendered_event_ids: [],
+  inspect_damage_state: { table_preferences: undefined },
 };
 
 export function getDefaultSessionState(
   backup?: Partial<SessionState> | null,
 ): Omit<SessionState, 'session_id'> {
-  return backup ? { ...DEFAULT_SESSION_STATE, ...backup } : DEFAULT_SESSION_STATE;
+  if (!backup) return DEFAULT_SESSION_STATE;
+  return {
+    ...DEFAULT_SESSION_STATE,
+    ...backup,
+    inspect_damage_state: {
+      table_preferences: backup.inspect_damage_state?.table_preferences,
+    },
+  };
 }
 
 export function getInitialSessionId(): string | null {
@@ -63,6 +71,9 @@ export function saveSessionBackup(session: SessionResponse): void {
       global_filters: session.global_filters,
       rendered_event_ids: session.rendered_event_ids,
       ui_preferences: session.ui_preferences,
+      inspect_damage_state: {
+        table_preferences: session.inspect_damage_state?.table_preferences,
+      },
     };
     sessionStorage.setItem(SESSION_BACKUP_KEY, JSON.stringify(backup));
   } catch {
@@ -79,10 +90,50 @@ export function mergeSessionUpdates(
   current: Partial<SessionState>,
   updates: Partial<SessionState>,
 ): Partial<SessionState> {
-  return {
+  const merged: Partial<SessionState> = {
     ...current,
     ...updates,
   };
+
+  if (current.data_state && updates.data_state) {
+    merged.data_state = {
+      ...current.data_state,
+      ...updates.data_state,
+    };
+  }
+
+  if (current.ui_preferences && updates.ui_preferences) {
+    merged.ui_preferences = {
+      ...current.ui_preferences,
+      ...updates.ui_preferences,
+    };
+  }
+
+  if (current.inspect_damage_state && updates.inspect_damage_state) {
+    const updateHasTablePreferences = Object.prototype.hasOwnProperty.call(
+      updates.inspect_damage_state,
+      'table_preferences',
+    );
+    const tablePreferences =
+      updateHasTablePreferences &&
+      current.inspect_damage_state.table_preferences &&
+      updates.inspect_damage_state.table_preferences
+        ? {
+            ...current.inspect_damage_state.table_preferences,
+            ...updates.inspect_damage_state.table_preferences,
+          }
+        : updateHasTablePreferences
+          ? updates.inspect_damage_state.table_preferences
+          : current.inspect_damage_state.table_preferences;
+
+    merged.inspect_damage_state = {
+      ...current.inspect_damage_state,
+      ...updates.inspect_damage_state,
+      table_preferences: tablePreferences,
+    };
+  }
+
+  return merged;
 }
 
 export function hasSessionUpdates(state: Partial<SessionState>): boolean {

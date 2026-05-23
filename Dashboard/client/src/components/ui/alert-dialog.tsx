@@ -9,6 +9,7 @@ interface AlertDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
+  backdropClassName?: string;
 }
 
 interface AlertDialogContentProps {
@@ -40,7 +41,12 @@ const AlertDialogContext = React.createContext<{
   onOpenChange: (open: boolean) => void;
 } | null>(null);
 
-export function AlertDialog({ open, onOpenChange, children }: AlertDialogProps) {
+export function AlertDialog({
+  open,
+  onOpenChange,
+  children,
+  backdropClassName,
+}: AlertDialogProps) {
   if (!open) return null;
 
   return (
@@ -48,7 +54,7 @@ export function AlertDialog({ open, onOpenChange, children }: AlertDialogProps) 
       <div className="fixed inset-0 z-50 flex items-center justify-center">
         {/* Backdrop */}
         <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm"
+          className={cn('fixed inset-0 bg-black/50 backdrop-blur-sm', backdropClassName)}
           onClick={() => onOpenChange(false)}
         />
         {/* Content wrapper */}

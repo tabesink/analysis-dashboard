@@ -102,6 +102,7 @@ class CSVParser:
                 if len(headers) < len(df.columns):
                     headers.extend([f"col_{i}" for i in range(len(headers), len(df.columns))])
                 df.columns = headers[: len(df.columns)]
+            df.attrs["units"] = units
 
             logger.info(f"Parsed {filename}: {len(df)} rows, {len(df.columns)} columns")
 

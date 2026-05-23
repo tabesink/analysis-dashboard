@@ -40,18 +40,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Ensure directories exist
     settings.data_root.mkdir(parents=True, exist_ok=True)
+    settings.scratch_dir.mkdir(parents=True, exist_ok=True)
     settings.log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Apply migrations before store initialization.
+    # Initialize storage through one explicit startup mutation path.
     from server.storage.migrations import MigrationRunner
 
     migration_runner = MigrationRunner(settings.database_path)
-    migration_result = migration_runner.migrate_up()
-    if not migration_result.get("success"):
-        error_message = migration_result.get("error") or migration_result.get("message")
-        raise RuntimeError(
-            f"Database migrations failed: {error_message or 'unknown error'}"
-        )
+    app.state.db, migration_result = migration_runner.initialize_store_for_startup()
     app_logger.info(
         "migrations applied",
         extra={
@@ -59,12 +55,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "reason": migration_result.get("message"),
         },
     )
-
-    # Initialize unified storage (single .db file)
-    from server.storage.database import UnifiedStore
-
-    logger.info(f"Initializing unified database: {settings.database_path}")
-    app.state.db = UnifiedStore(settings.database_path)
+    logger.info(f"Unified database initialized: {settings.database_path}")
 
     # Initialize cache
     from server.utils.cache import SimpleCache
@@ -84,6 +75,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         UserService(app.state.db, settings).bootstrap_admin()
     except Exception:
         logger.exception("admin bootstrap failed")
+
+    from server.services.export import (
+        cleanup_stale_import_staging_file,
+        reconcile_persisted_parquet_tasks,
+    )
+
+    cleanup_stale_import_staging_file(settings.database_path)
+    reconcile_persisted_parquet_tasks()
 
     logger.info("Server ready to accept requests")
 
@@ -145,10 +144,12 @@ def create_app() -> FastAPI:
         admin_users,
         auth,
         dashboard,
+        damage,
         export,
         health,
         info,
         session,
+        sync,
         upload,
     )
 
@@ -158,7 +159,9 @@ def create_app() -> FastAPI:
     app.include_router(admin_users.router, prefix="/api/v1", tags=["admin"])
     app.include_router(upload.router, prefix="/api/v1", tags=["upload"])
     app.include_router(dashboard.router, prefix="/api/v1", tags=["dashboard"])
+    app.include_router(damage.router, prefix="/api/v1", tags=["damage"])
     app.include_router(session.router, prefix="/api/v1", tags=["session"])
+    app.include_router(sync.router, prefix="/api/v1", tags=["sync"])
     app.include_router(export.router, prefix="/api/v1", tags=["export"])
 
     # Register error handlers

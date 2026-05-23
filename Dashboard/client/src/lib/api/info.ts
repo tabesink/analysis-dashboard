@@ -17,6 +17,11 @@ export interface InfoResponse {
   server_version: string;
   api_version: string;
   client_min_version: string;
+  app_env: string;
+  database_status: string;
+  database_schema_version: number | null;
+  database_schema_target_version: number;
+  database_schema_needs_migration: boolean;
 }
 
 /**

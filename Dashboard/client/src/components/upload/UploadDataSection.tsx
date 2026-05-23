@@ -360,16 +360,7 @@ export function UploadDataSection({
             </div>
           )}
 
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!isUploading}
-              onClick={onCancelUpload}
-            >
-              Cancel
-            </Button>
+          <div className="flex justify-center gap-2">
             <Button
               type="button"
               size="sm"
@@ -384,6 +375,15 @@ export function UploadDataSection({
               ) : (
                 'Import'
               )}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!isUploading}
+              onClick={onCancelUpload}
+            >
+              Cancel
             </Button>
           </div>
         </div>

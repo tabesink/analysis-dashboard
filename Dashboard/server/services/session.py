@@ -82,6 +82,7 @@ class SessionManager:
             "global_filters",
             "rendered_event_ids",
             "ui_preferences",
+            "inspect_damage_state",
         ]:
             value = session.get(field)
             if isinstance(value, str):
@@ -120,11 +121,37 @@ class SessionManager:
         if existing is None:
             return False
 
-        data["user_id"] = user_id
-        # Extend expiration on update
-        data["expires_at"] = (datetime.now(timezone.utc) + self.session_ttl).isoformat()
+        merged: dict[str, Any] = {
+            "data_state": existing.get("data_state"),
+            "global_filters": existing.get("global_filters"),
+            "rendered_event_ids": existing.get("rendered_event_ids"),
+            "ui_preferences": existing.get("ui_preferences"),
+            "inspect_damage_state": existing.get("inspect_damage_state"),
+        }
+        for key, value in data.items():
+            if key in ("user_id", "expires_at"):
+                continue
+            if value is None:
+                continue
+            if key == "inspect_damage_state":
+                existing_inspect = existing.get("inspect_damage_state") or {}
+                incoming_inspect = value
+                merged_inspect = {**existing_inspect, **incoming_inspect}
+                if incoming_inspect.get("table_preferences") is not None:
+                    existing_prefs = existing_inspect.get("table_preferences") or {}
+                    merged_inspect["table_preferences"] = {
+                        **existing_prefs,
+                        **incoming_inspect["table_preferences"],
+                    }
+                merged["inspect_damage_state"] = merged_inspect
+                continue
+            merged[key] = value
 
-        self.db.upsert_session(session_id, data)
+        merged["user_id"] = user_id
+        # Extend expiration on update
+        merged["expires_at"] = (datetime.now(timezone.utc) + self.session_ttl).isoformat()
+
+        self.db.upsert_session(session_id, merged)
 
         logger.debug(f"Updated session: {session_id}")
         return True

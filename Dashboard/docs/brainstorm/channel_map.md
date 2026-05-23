@@ -58,3 +58,23 @@ bushing_r_xz_force_plot:
   y_col: 16
 
 On the right hand panel display the first 20 lines of the FIRST .csv file in the corresponding  program id > version > first .csv file. THESE first 20 lines will consit of the colum headers titles units datatyes followed by few lines of the table data TO DESIGN THE FRONT END rely on the following REFERNCE CODE: .references/client-side-table-code
+
+
+
+SEE INSPECT DAMAGE COLUMN MAP
+
+BJ X Force - x_col: 2
+BJ Y Force - y_col: 3
+BJ Z Force - y_col: 4
+
+Shock X Force - x_col: 20
+Shock Y Force - y_col: 21
+Shock Z Force - y_col: 22
+
+Bushing F X Momt - x_col: 8
+Bushing F Y Momt - y_col: 9
+Bushing F Z Momt - y_col: 10
+
+Bushing R X Momt - x_col: 14
+Bushing R Y Momt - y_col: 15
+Bushing R Z Momt - y_col: 16

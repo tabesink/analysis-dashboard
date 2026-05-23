@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback } from 'react';
+import { Card } from '@/components/ui/card';
 import { DashboardTabs } from './DashboardTabs';
-import { GridActionToolbar } from './shared';
-import { useFilterState } from '@/hooks/use-filter-state';
-import { useFilterSelectionSync } from '@/hooks/use-filter-selection-sync';
+import { DashboardWorkspaceActions } from './shared';
+import { useDashboardWorkspace } from '@/modules/dashboard-workspace';
 import { useRenderStore } from '@/stores/render-store';
 import { usePinnedEventsStore } from '@/stores/pinned-events-store';
 import { useUIStore } from '@/stores/ui-store';
@@ -29,17 +29,7 @@ export function DashboardContent({
   onTabChange,
   className = '',
 }: DashboardContentProps) {
-  const {
-    allSelectedEventIds,
-    renderedEventIds,
-    hasUnrenderedChanges,
-    clearRenderedEventIds,
-  } = useFilterState();
-
-  // Prune session.selected_event_ids when a dimension filter hides previously
-  // checked events (DEC-037). Must mount inside the dashboard tree where the
-  // session and event catalog are available.
-  useFilterSelectionSync();
+  const workspace = useDashboardWorkspace();
 
   const isRendering = useRenderStore((s) => s.isRendering);
   const startRendering = useRenderStore((s) => s.startRendering);
@@ -53,9 +43,8 @@ export function DashboardContent({
   const resetCurveVisibility = useUIStore((s) => s.resetCurveVisibility);
   const resetAllEventOverrideColors = useColorSelectionStore((s) => s.resetAllEventOverrideColors);
 
-  const hasSelection = allSelectedEventIds.length > 0;
   const hasPinnedEvents = pinnedEventIds.length > 0;
-  const hasRenderedPlots = renderedEventIds.length > 0;
+  const hasRenderedPlots = workspace.state.renderedEventIds.length > 0;
   const isInteractiveView = activeTab === 'interactive';
   const hasInteractiveVisibilityOverrides = Object.keys(curveVisibility).length > 0;
   const clearDisabled = isInteractiveView ? !hasInteractiveVisibilityOverrides : !hasRenderedPlots;
@@ -86,34 +75,34 @@ export function DashboardContent({
       return;
     }
 
-    clearRenderedEventIds();
+    workspace.actions.clearRenderedEventIds();
     clearSelectedInteractivePlot();
     resetCurveVisibility();
     if (isRendering) {
       stopRendering();
     }
-  }, [isInteractiveView, resetCurveVisibility, clearRenderedEventIds, clearSelectedInteractivePlot, isRendering, stopRendering]);
+  }, [isInteractiveView, resetCurveVisibility, workspace.actions, clearSelectedInteractivePlot, isRendering, stopRendering]);
 
   const handleExport = useCallback(() => {
     // Reserved for upcoming grid export flow.
   }, []);
 
   return (
-    <div className={`flex-1 flex flex-col min-w-0 bg-card border border-border rounded-r-lg shadow-subtle overflow-hidden ${className}`}>
-      <div className="relative flex-1 min-h-0">
-        <DashboardTabs
-          tabs={config.tabs}
-          activeTab={activeTab}
-          onTabChange={onTabChange}
-        />
-        <GridActionToolbar
+    <Card
+      className={`h-full min-w-0 flex-1 rounded-r-lg rounded-l-none flex flex-col gap-0 overflow-hidden shadow-subtle border py-0 ${className}`}
+    >
+      <div className="shrink-0 flex items-center justify-between border-b px-4 py-3">
+        <p className="text-sm font-medium">
+          {isInteractiveView ? 'Interactive Layout' : 'Grid Layout'}
+        </p>
+        <DashboardWorkspaceActions
           isInteractiveView={isInteractiveView}
           isPinnedModeActive={isPinnedModeActive}
           hasPinnedEvents={hasPinnedEvents}
           isRendering={isRendering}
           hasRenderedPlots={hasRenderedPlots}
-          hasPendingRerenderChanges={hasUnrenderedChanges}
-          renderDisabled={!hasSelection}
+          hasPendingRerenderChanges={workspace.state.hasUnrenderedChanges}
+          renderDisabled={!workspace.state.canRender}
           clearDisabled={clearDisabled}
           exportDisabled
           onRender={handleRender}
@@ -123,7 +112,13 @@ export function DashboardContent({
           onTogglePinnedMode={togglePinnedMode}
         />
       </div>
-    </div>
+      <div className="flex-1 min-h-0">
+        <DashboardTabs
+          tabs={config.tabs}
+          activeTab={activeTab}
+          onTabChange={onTabChange}
+        />
+      </div>
+    </Card>
   );
 }
-

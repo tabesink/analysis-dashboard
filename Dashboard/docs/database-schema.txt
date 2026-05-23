@@ -1,8 +1,10 @@
 RSP Data Analytics Dashboard - Database Schema
 ================================================
-Last updated: 2026-04-29
+Last updated: 2026-05-21
 Engine: DuckDB (single file at data/dashboard.db at runtime)
-Sources: server/schema.yaml (dim tables), server/storage/database.py (_init_schema)
+Declared schema source: server/schema.yaml
+Schema application: server/storage/schema_loader.py + server/storage/schema_applier.py
+Runtime data backfills: server/storage/data_backfills.py
 
 ================================================================================
 SEQUENCES
@@ -12,11 +14,11 @@ seq_audit_log_id              START 1    (schema.yaml)
 seq_meas_lttb_id              START 1    (schema.yaml)
 seq_saved_filter_id           START 1    (schema.yaml)
 seq_event_access_id           START 1    (schema.yaml)
-seq_channel_map_id            START 1    (database.py)
-seq_meas_raw_id               START 1    (database.py)
-seq_custom_field_value_id     START 1    (database.py)
-seq_event_custom_field_value_id START 1  (database.py)
-seq_ingestion_artifact_id     START 1    (database.py)
+seq_channel_map_id            START 1    (schema.yaml)
+seq_meas_raw_id               START 1    (schema.yaml)
+seq_custom_field_value_id     START 1    (schema.yaml)
+seq_event_custom_field_value_id START 1  (schema.yaml)
+seq_ingestion_artifact_id     START 1    (schema.yaml)
 
 ================================================================================
 TABLES
@@ -31,7 +33,7 @@ dim_program  (schema.yaml)
   created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
 
 --------------------------------------------------------------------------------
-dim_event  (schema.yaml + database.py ALTER TABLE additions)
+dim_event  (schema.yaml; additive columns declared with additive=true)
   Event metadata with filter columns. One row per uploaded CSV file.
 --------------------------------------------------------------------------------
   -- Identity
@@ -76,7 +78,7 @@ dim_event  (schema.yaml + database.py ALTER TABLE additions)
   updated_at          TIMESTAMP
 
 --------------------------------------------------------------------------------
-dim_channel_map  (database.py)
+dim_channel_map  (schema.yaml)
   Plot channel configuration per program/version/plot_key
 --------------------------------------------------------------------------------
   id                  BIGINT        PK  DEFAULT nextval('seq_channel_map_id')
@@ -95,7 +97,7 @@ dim_channel_map  (database.py)
   UNIQUE (program_id, version, plot_key)
 
 --------------------------------------------------------------------------------
-ingestion_artifacts  (database.py)
+ingestion_artifacts  (schema.yaml)
   Retained CSV artifacts for pending channel-map setup and later reprocessing
 --------------------------------------------------------------------------------
   artifact_id         BIGINT        PK  DEFAULT nextval('seq_ingestion_artifact_id')
@@ -119,7 +121,7 @@ ingestion_artifacts  (database.py)
   UNIQUE (program_id, version, file_hash)
 
 --------------------------------------------------------------------------------
-users  (database.py)
+users  (schema.yaml)
   Authenticated users
 --------------------------------------------------------------------------------
   id                  VARCHAR       PK
@@ -127,12 +129,13 @@ users  (database.py)
   role                VARCHAR       NOT NULL   (values: user, admin)
   password_hash       VARCHAR
   can_write           BOOLEAN       DEFAULT FALSE  (admin rows forced TRUE; ALTER TABLE IF NOT EXISTS)
+  token_version       INTEGER       DEFAULT 0      (auth token/session revocation version)
   created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
   last_login_at       TIMESTAMP
   last_settings_visit_at TIMESTAMP                  (admin notification baseline; ALTER TABLE IF NOT EXISTS)
 
 --------------------------------------------------------------------------------
-measurements_raw  (database.py)
+measurements_raw  (schema.yaml)
   Raw time-series signal data in long format
 --------------------------------------------------------------------------------
   id                  BIGINT        PK  DEFAULT nextval('seq_meas_raw_id')
@@ -142,7 +145,7 @@ measurements_raw  (database.py)
   value               DOUBLE
 
 --------------------------------------------------------------------------------
-measurements_lttb  (database.py)
+measurements_lttb  (schema.yaml)
   LTTB-downsampled plot data
 --------------------------------------------------------------------------------
   id                  BIGINT        PK  DEFAULT nextval('seq_meas_lttb_id')
@@ -152,7 +155,7 @@ measurements_lttb  (database.py)
   y                   FLOAT         NOT NULL
 
 --------------------------------------------------------------------------------
-sessions  (database.py)
+sessions  (schema.yaml)
   User session state (JSON blobs + expiry)
 --------------------------------------------------------------------------------
   session_id          VARCHAR       PK
@@ -163,12 +166,13 @@ sessions  (database.py)
   global_filters      JSON
   rendered_event_ids  JSON          (added via ALTER TABLE)
   ui_preferences      JSON
+  inspect_damage_state JSON         (added via ALTER TABLE)
   created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
   updated_at          TIMESTAMP
   expires_at          TIMESTAMP
 
 --------------------------------------------------------------------------------
-upload_tasks  (database.py)
+upload_tasks  (schema.yaml)
   Upload task state for async CSV progress streaming
 --------------------------------------------------------------------------------
   task_id             VARCHAR       PK
@@ -185,7 +189,7 @@ upload_tasks  (database.py)
   expires_at          TIMESTAMP     NOT NULL
 
 --------------------------------------------------------------------------------
-saved_filters  (database.py)
+saved_filters  (schema.yaml)
   Saved filter presets
 --------------------------------------------------------------------------------
   id                  BIGINT        PK  DEFAULT nextval('seq_saved_filter_id')
@@ -199,7 +203,7 @@ saved_filters  (database.py)
   created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
 
 --------------------------------------------------------------------------------
-user_preferences  (database.py)
+user_preferences  (schema.yaml)
   Per-user UI preferences
 --------------------------------------------------------------------------------
   user_id             VARCHAR       PK  DEFAULT 'default'
@@ -213,7 +217,7 @@ user_preferences  (database.py)
   updated_at          TIMESTAMP
 
 --------------------------------------------------------------------------------
-audit_log  (database.py)
+audit_log  (schema.yaml)
   Audit trail for tracked actions
 --------------------------------------------------------------------------------
   id                  BIGINT        PK  DEFAULT nextval('seq_audit_log_id')
@@ -224,7 +228,7 @@ audit_log  (database.py)
   timestamp           TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
 
 --------------------------------------------------------------------------------
-event_access_log  (database.py)
+event_access_log  (schema.yaml)
   Event access tracking
 --------------------------------------------------------------------------------
   id                  BIGINT        PK  DEFAULT nextval('seq_event_access_id')
@@ -234,7 +238,7 @@ event_access_log  (database.py)
   accessed_at         TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
 
 --------------------------------------------------------------------------------
-custom_field_definitions  (database.py)
+custom_field_definitions  (schema.yaml)
   Admin-defined custom filter fields
 --------------------------------------------------------------------------------
   field_key           VARCHAR       PK
@@ -246,7 +250,7 @@ custom_field_definitions  (database.py)
   updated_at          TIMESTAMP
 
 --------------------------------------------------------------------------------
-custom_field_allowed_values  (database.py)
+custom_field_allowed_values  (schema.yaml)
   Program-scoped allowed values for custom fields
 --------------------------------------------------------------------------------
   id                  BIGINT        PK  DEFAULT nextval('seq_custom_field_value_id')
@@ -258,7 +262,7 @@ custom_field_allowed_values  (database.py)
   UNIQUE (field_key, program_id, value)
 
 --------------------------------------------------------------------------------
-event_custom_field_values  (database.py)
+event_custom_field_values  (schema.yaml)
   Event-level custom field values
 --------------------------------------------------------------------------------
   id                  BIGINT        PK  DEFAULT nextval('seq_event_custom_field_value_id')
@@ -269,7 +273,7 @@ event_custom_field_values  (database.py)
   UNIQUE (event_id, field_key)
 
 --------------------------------------------------------------------------------
-_schema_metadata  (database.py)
+_schema_metadata  (schema.yaml)
   Schema metadata for portability / runtime discovery
 --------------------------------------------------------------------------------
   key                 VARCHAR       PK
@@ -329,15 +333,29 @@ Use UnifiedStore.get_relationship_orphan_counts() to validate FK readiness.
 NOTES
 ================================================================================
 
-- Several dim_event columns are added via ALTER TABLE IF NOT EXISTS in
-  database.py _init_schema for backwards compatibility with older .db files.
+- Additive columns are declared in server/schema.yaml and applied via
+  SchemaApplier using ALTER TABLE ADD COLUMN IF NOT EXISTS.
 - Legacy "maturity" column is backfilled into "status" during init if present.
 - schema.yaml version field tracks schema version for portability checks.
+- _init_schema delegates runtime data backfills to
+  server/storage/data_backfills.py; DDL facts belong in server/schema.yaml.
+- App startup uses server/storage/migrations.py
+  MigrationRunner.initialize_store_for_startup() as the canonical mutation path
+  (migrate/apply -> open UnifiedStore -> run startup backfills).
 - _schema_metadata stores filter_options, filter_columns, schema_version
   for export/import compatibility validation.
+- _schema_metadata also stores runtime monotonic `data_version` used for
+  multi-user cache coordination (incremented on committed write transactions).
 
 Portable export format (admin UI / API), not the live DB file:
 - Admin export produces a ZIP (e.g. dashboard_export.zip) containing Parquet files
-  (ZSTD compression), plus schema.sql and load.sql generated by UnifiedStore.export_to_parquet.
-- Admin import accepts that ZIP only; UnifiedStore.import_from_parquet rebuilds dashboard.db
-  from those artifacts, then runs _init_schema() to align with the current app schema.
+  (ZSTD compression) for load-data tables only, plus schema.sql and load.sql.
+- Included tables: dim_program, dim_event, dim_channel_map, measurements_raw,
+  measurements_lttb, event_custom_field_values, and _schema_metadata when present.
+- Excluded: users, sessions, saved_filters, audit_log, custom_field_definitions,
+  custom_field_allowed_values, ingestion_artifacts, and retained files under
+  managed_artifacts/channel-map (DEC-062, DEC-063).
+- Admin import accepts that ZIP; loads into dashboard.db.staging, then atomically
+  replaces the live dashboard.db load-data subset while preserving target-local
+  account/configuration tables. Creates dashboard.db.bak before swap.
+- See docs/notes/database.md and Deployment/README.md for operator workflow.

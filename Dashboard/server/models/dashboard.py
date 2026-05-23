@@ -48,10 +48,24 @@ class PartitionState(BaseModel):
 class EventsRequest(BaseModel):
     """Request for events endpoint."""
 
+    program_ids: list[str] = Field(
+        default_factory=list,
+        description="Optional explicit program scope for event queries",
+    )
+    versions: list[str] = Field(
+        default_factory=list,
+        description="Optional explicit version scope for event queries",
+    )
     global_filters: dict[str, list[str] | str] = Field(
         default_factory=dict,
         description="Global filters applied to all events",
     )
+
+
+class EventsByIdsRequest(BaseModel):
+    """Request for event metadata lookup by ID."""
+
+    event_ids: list[str] = Field(default_factory=list)
 
 
 class EventMetadata(BaseModel):
@@ -94,8 +108,8 @@ class EventMetadata(BaseModel):
     updated_at: str | None = None
 
 
-class EventMetadataUpdateRequest(BaseModel):
-    """Payload for updating editable event metadata fields."""
+class EventMetadataUpdateFields(BaseModel):
+    """Editable metadata fields for event updates."""
 
     job_number: str | None = None
     work_order: str | None = None
@@ -116,12 +130,21 @@ class EventMetadataUpdateRequest(BaseModel):
     status: str | None = None
 
 
+class EventMetadataUpdateRequest(EventMetadataUpdateFields):
+    """Payload for updating one event with optimistic concurrency control."""
+
+    if_unmodified_since: str | None = Field(
+        ...,
+        description="Expected current updated_at value for optimistic concurrency control",
+    )
+
+
 class ProgramVersionMetadataUpdateRequest(BaseModel):
     """Payload for updating metadata fields across a program/version."""
 
     program_id: str = Field(min_length=1)
     version: str = Field(min_length=1)
-    updates: EventMetadataUpdateRequest
+    updates: EventMetadataUpdateFields
 
 
 class ProgramVersionMetadataUpdateResponse(BaseModel):

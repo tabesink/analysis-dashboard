@@ -696,3 +696,341 @@ Self-registration via `POST /auth/register` creates a `role=user, can_write=FALS
 
 **Key files:** `docs/templates/main-webapp-elements/DESIGN.md`, `docs/templates/main-webapp-elements/REFACTOR.md`, `docs/templates/main-webapp-elements/AUDIT.md`, `docs/templates/main-webapp-elements/SKILL.md`, `docs/templates/main-webapp-elements/reference/`, `docs/tasks/P13-02.md`.
 
+---
+
+## DEC-046: Deepen Dashboard workspace and filter semantics modules (2026-05-15)
+
+**Context:** The Dashboard architecture review found two high-leverage shallow clusters: client-side selection/filter/session behavior spread across hooks and server-side filter meaning split across query service, store methods, schema metadata, and utility helpers.
+
+**Decision:** Introduce `client/src/modules/dashboard-workspace/` as the React-facing module for Dashboard selection/catalog/session rules, and `server/modules/filter_semantics/` as the server module for converting user filter input into validated filter plans. Keep SQL execution in query/storage code and keep the broad `UnifiedStore` split out of scope.
+
+**Rationale:** These modules reduce what callers need to know while preserving route contracts and current UI behavior. The server plan improves consistency across event, program, and version filtering; the client workspace module moves selection pruning out of `DashboardContent` and gives the state rules a behavior-tested interface.
+
+**Key files:** `client/src/modules/dashboard-workspace/`, `client/src/components/dashboard/DashboardContent.tsx`, `server/modules/filter_semantics/`, `server/services/query.py`, `server/storage/database.py`, `docs/architecture/dashboard-deepening.md`, `docs/tasks/P11-06.md`.
+
+---
+
+## DEC-047: Validate Parquet ZIP member paths before import extraction (2026-05-15)
+
+**Context:** PR 3 data-safety review found that Parquet ZIP validation and background import extracted archive members by name before checking that the resulting paths stayed inside the managed temporary extraction root.
+
+**Decision:** Add one shared ZIP member target guard in `server/services/export.py` and use it for both validation-time extraction and background import extraction. Reject absolute paths, parent-directory traversal, empty path components, and backslash-separated paths before writing any member to disk.
+
+**Rationale:** Import packages are admin-only, but they still cross a file-system trust boundary. Validating member paths before extraction keeps malformed archives from writing outside managed temp directories and makes failed imports preserve the current database state.
+
+**Alternatives considered:**
+- Rely on `shutil.unpack_archive` for validation -- rejected because it hides the per-member path policy and differs from the custom background import extraction path.
+- Validate only in the upload route -- rejected because `ExportService.start_import_task()` can be exercised directly in service tests and should own its own file-system safety invariant.
+
+**Key files:** `server/services/export.py`, `tests/server/services/test_export_service.py`, `docs/refactor/CONCURRENCY_AND_DATA_SAFETY_REVIEW.md`, `docs/tasks/P8-17.md`.
+
+---
+
+## DEC-048: Dashboard selection pruning is owned by workspace dimension whitelist (2026-05-15)
+
+**Context:** Dashboard selection pruning existed in two places: the workspace module path and a local `LoadDataSection` effect. The local effect pruned from the search-filtered `events` list, which could mutate persisted `selected_event_ids` during `event_id_query` usage. This conflicted with the intended contract where Event-ID search is a find tool, not a pruning trigger.
+
+**Decision:** Keep pruning ownership in the dashboard workspace flow only, fed by `useEventCatalog.dimensionFilteredEventIds`. Update the whitelist to include selectable events only (`selectable_for_plotting !== false`) and remove side-panel-local pruning logic from `LoadDataSection`.
+
+**Rationale:** One pruning owner prevents contract drift and avoids accidental selection loss from transient UI search state. Filtering the workspace whitelist to selectable events keeps missing-channel-map/non-selectable IDs from surviving in persisted selection while still allowing those rows to render as disabled in the tree.
+
+**Key files:** `client/src/hooks/use-event-catalog.ts`, `client/src/components/dashboard/side-panel/LoadDataSection.tsx`, `client/src/modules/dashboard-workspace/dashboard-workspace.test.ts`, `docs/tasks/P9-12.md`.
+
+---
+
+## DEC-049: DuckDB DDL facts live in the schema registry (2026-05-15)
+
+**Context:** `server/schema.yaml` described dim tables and filter metadata, while `UnifiedStore._init_schema()` also created runtime tables, sequences, additive columns, indexes, and data backfills. `MigrationRunner` used the YAML path while app startup used a larger embedded DDL path, leaving schema ownership split across files.
+
+**Decision:** Keep `server/schema.yaml` as the schema registry path and normalize it into the full declared DuckDB DDL registry. Use `SchemaLoader` plus `SchemaApplier` as the shared DDL application path for both `UnifiedStore` startup and `MigrationRunner`. Keep runtime data backfills in `_init_schema()` for this slice.
+
+**Rationale:** A single declared schema source makes the database easier to explain and avoids future schema changes being added to the wrong place. Keeping `UnifiedStore` as the connection owner preserves the existing DuckDB locking and facade behavior while reducing schema entropy first.
+
+**Alternatives considered:**
+- Move the registry to `server/storage/schema_registry.yaml` immediately -- rejected for this slice to avoid unnecessary path churn.
+- Split repositories first -- rejected because it would spread schema confusion across more files before fixing ownership.
+- Add a schema doctor in the same slice -- deferred to keep the first implementation DDL-only and behavior-focused.
+
+**Key files:** `server/schema.yaml`, `server/storage/schema_loader.py`, `server/storage/schema_applier.py`, `server/storage/database.py`, `server/storage/migrations.py`, `tests/server/storage/test_schema_initialization.py`, `docs/tasks/P11-07.md`.
+
+---
+
+## DEC-050: Add declared-vs-live schema doctor classifications to migration diff (2026-05-15)
+
+**Context:** DEC-049 intentionally deferred schema doctor reporting to keep the DDL-ownership slice narrow. After that refactor landed, `MigrationRunner.generate_migration_diff()` still only returned table-set differences (`missing_tables`/`extra_tables`) and could not classify table-level drift causes such as declared-vs-live type mismatches.
+
+**Decision:** Extend `MigrationRunner.generate_migration_diff()` to produce a schema doctor report that compares declared tables/columns from `server/schema.yaml` against live DuckDB catalog columns and classifies each table as `OK`, `MISSING`, `TYPE_MISMATCH`, or `DRIFT`. Keep the existing compatibility fields (`tables_in_schema`, `tables_in_db`, `missing_tables`, `extra_tables`) for current CLI/script consumers while adding `doctor_report` and `doctor_summary`.
+
+**Rationale:** This keeps the public migration diff entry point stable while making drift diagnosis actionable. Table-level statuses are easy for junior developers to read, and preserving existing fields avoids forcing a CLI contract migration in the same slice.
+
+**Alternatives considered:**
+- Add a separate new API and leave `generate_migration_diff()` unchanged -- rejected to avoid duplicating schema introspection logic and diverging reports.
+- Report only per-column entries -- rejected for this slice because table-level classifications better match the requested statuses and CLI readability goals.
+
+**Key files:** `server/storage/migrations.py`, `tests/server/storage/test_schema_initialization.py`, `docs/tasks/P11-08.md`.
+
+---
+
+## DEC-051: Sequence post-doctor refactor slices as backfills -> startup ownership -> users/sessions repositories (2026-05-15)
+
+**Context:** After DEC-049 and DEC-050, schema ownership and declared-vs-live reporting are in place, but `_init_schema()` still mixes structural DDL delegation with row-mutating backfills, and `UnifiedStore` still aggregates broad domain behavior in one module.
+
+**Decision:** Continue the refactor in ordered, low-risk slices:
+1. Extract row-mutating backfills into a dedicated backfill module invoked after schema apply.
+2. Clarify startup schema mutation ownership in one path without changing runtime locking/connection behavior.
+3. Start repository extraction with `users` then `sessions`, keeping `database.py` as the sole DuckDB connection owner.
+
+**Rationale:** This sequence preserves a working app while reducing entropy in the highest-confusion zones first. It avoids broad rewrites and keeps each slice behavior-testable.
+
+**Alternatives considered:**
+- Split repositories immediately across all domains -- rejected due to higher blast radius while backfill/schema boundaries remain mixed.
+- Introduce ORM/migration framework now -- rejected as unnecessary complexity for the current phased cleanup.
+
+**Key files:** `docs/master-build-plan.md`, `docs/brainstorm/04_refactor_codebase/plan_v1.md`, `docs/brainstorm/04_refactor_codebase/database_script_overengineered_fix.md`, `.cursor/plans/schema-ddl-refactor_0f643c19.plan.md`.
+
+---
+
+## DEC-052: Startup data backfills extracted to dedicated module (2026-05-15)
+
+**Context:** After DEC-049/DEC-050, `_init_schema()` still mixed schema-apply delegation with row-mutating startup backfill SQL. The next planned low-risk slice was to separate backfill ownership without changing startup behavior.
+
+**Decision:** Move startup row backfills into `server/storage/data_backfills.py` via `apply_startup_backfills(conn)`, and call it from `UnifiedStore._init_schema()` immediately after `SchemaApplier(...).apply(conn)`.
+
+**Rationale:** This isolates mutable data-fix logic from structural schema apply logic while preserving the existing call order, transaction scope, and idempotent behavior.
+
+**Alternatives considered:**
+- Keep backfill SQL inline in `_init_schema()` until startup ownership cleanup -- rejected to keep each refactor slice narrow and explicit.
+- Move backfills into migration runner path now -- rejected for this slice because runtime startup behavior must remain unchanged before broader startup-path cleanup.
+
+**Key files:** `server/storage/data_backfills.py`, `server/storage/database.py`, `tests/server/storage/test_schema_initialization.py`, `docs/tasks/P11-09.md`.
+
+---
+
+## DEC-053: Canonical startup storage mutation path in MigrationRunner (2026-05-15)
+
+**Context:** Startup orchestration in `server/main.py` still handled schema mutation and store initialization as separate steps: `MigrationRunner.migrate_up()` followed by `UnifiedStore(...)`, where `UnifiedStore` re-ran schema apply + backfills. This worked, but ownership was split across startup code and store internals.
+
+**Decision:** Add `MigrationRunner.initialize_store_for_startup()` as the canonical startup entry point. It now owns startup mutation order explicitly:
+1. run `migrate_up()` for declared schema mutation,
+2. construct `UnifiedStore` as the connection owner without schema re-apply,
+3. run startup backfills.
+
+`server/main.py` now uses this single entry point. `UnifiedStore` keeps default behavior for existing call sites and tests by retaining schema initialization on normal construction.
+
+**Rationale:** This makes startup ownership easier to follow in one path while preserving existing runtime behavior and the current single-connection locking model.
+
+**Alternatives considered:**
+- Keep startup split across `main.py` and `UnifiedStore.__init__` -- rejected because it keeps mutation ownership implicit and duplicated.
+- Move all mutation logic into `UnifiedStore` and remove migration runner startup use -- rejected because migration/version ownership already lives in `MigrationRunner`.
+
+**Key files:** `server/main.py`, `server/storage/migrations.py`, `server/storage/database.py`, `tests/server/storage/test_schema_initialization.py`, `docs/tasks/P11-10.md`.
+
+---
+
+## DEC-054: Extract users/sessions repositories behind UnifiedStore facade (2026-05-15)
+
+**Context:** After P11-09 and P11-10, startup mutation ownership was clearer, but `server/storage/database.py` still held many domain SQL blocks directly. The next low-risk slice in DEC-051 targeted `users` then `sessions` without changing ownership of DuckDB connections.
+
+**Decision:** Add `server/storage/repositories/users_repository.py` and `server/storage/repositories/sessions_repository.py`, and delegate existing `UnifiedStore` public methods for those domains to repository instances.
+
+**Rationale:** This creates a deeper, testable seam for low-risk domains while preserving the external `UnifiedStore` contract and keeping one connection/locking owner in `database.py`.
+
+**Alternatives considered:**
+- Extract all domains at once -- rejected due to higher blast radius.
+- Move connection ownership into repositories -- rejected because the current concurrency model depends on a single owner and shared lock in `UnifiedStore`.
+
+**Key files:** `server/storage/repositories/users_repository.py`, `server/storage/repositories/sessions_repository.py`, `server/storage/database.py`, `tests/server/storage/test_schema_initialization.py`, `docs/tasks/P11-11.md`.
+
+---
+
+## DEC-055: Monotonic data_version stored in _schema_metadata and bumped per committed write (2026-05-15)
+
+**Context:** Phase 8 multi-user roadmap required a monotonic `data_version` counter before adding sync endpoints and frontend polling. The current storage layer had no central write-version indicator.
+
+**Decision:** Store `data_version` in `_schema_metadata` and increment it once per successful `UnifiedStore.write_connection()` commit by default. Add `get_data_version()` for readers and allow explicit `bump_data_version=False` for non-mutating maintenance transactions.
+
+**Rationale:** This gives one centralized, low-touch write version signal without introducing a new table or changing ownership of DuckDB connections. The counter now advances with committed writes and can be consumed by upcoming `/sync/version` work.
+
+**Alternatives considered:**
+- Add a dedicated `data_version` table -- rejected to avoid schema churn while `_schema_metadata` already exists for runtime metadata.
+- Increment manually in each write method -- rejected because it is error-prone and easy to miss during future changes.
+
+**Key files:** `server/storage/database.py`, `tests/server/storage/test_schema_initialization.py`, `docs/tasks/P8-03.md`.
+
+---
+
+## DEC-056: Add authenticated sync/version endpoint for data_version polling (2026-05-15)
+
+**Context:** With `data_version` added in P8-03, multi-user synchronization needed a lightweight API surface that clients can poll to detect writes from other users and invalidate stale data.
+
+**Decision:** Add `GET /api/v1/sync/version` under a new sync router. The endpoint requires authentication and returns the current monotonic `data_version` from storage.
+
+**Rationale:** This provides a minimal, explicit contract for client polling without introducing websockets, push infrastructure, or broader protocol changes.
+
+**Alternatives considered:**
+- Expose the value through an existing router (e.g. `/info`) -- rejected to keep multi-user sync semantics isolated from general health/info metadata.
+- Make endpoint public -- rejected; sync state is app data metadata and should remain within authenticated scope.
+
+**Key files:** `server/routers/sync.py`, `server/main.py`, `tests/server/routers/test_sync_router.py`, `docs/tasks/P8-04.md`.
+
+---
+
+## DEC-057: Frontend sync/version polling invalidates sync-sensitive query groups (2026-05-15)
+
+**Context:** After P8-03 and P8-04, backend write-version tracking existed but clients still relied on static stale windows and did not react to external writes from other users.
+
+**Decision:** Add a frontend `useDataVersionSync()` hook that polls `/api/v1/sync/version` while authenticated and invalidates key dashboard query groups when `data_version` increases.
+
+**Rationale:** Poll+invalidate is the smallest reliable cross-user synchronization mechanism for the current single-instance architecture, avoiding websocket complexity while reducing stale multi-user views.
+
+**Alternatives considered:**
+- Invalidate all queries on every poll -- rejected due to unnecessary churn and avoidable network load.
+- Poll only on dashboard route mounts -- rejected to keep synchronization consistent across app surfaces that rely on shared query cache.
+
+**Key files:** `client/src/hooks/use-data-version-sync.ts`, `client/src/app/providers.tsx`, `client/src/lib/api/sync.ts`, `client/src/lib/api/sync.test.ts`, `docs/tasks/P8-05.md`.
+
+---
+
+## DEC-058: Cache invalidation ownership split by cache group semantics (2026-05-15)
+
+**Context:** Phase 8 write-path audit found that delete and metadata writes already invalidated event/program/version cache groups, but custom-field writes did not invalidate filter-options cache even though custom fields are projected into filter options.
+
+**Decision:** Keep cache invalidation centralized in `QueryService` and add `invalidate_filter_option_caches()` as the explicit public method for writes that affect filter options. Dashboard custom-field mutation routes now call this method after successful writes.
+
+**Rationale:** This keeps invalidation intent explicit and avoids sprinkling cache-key prefix knowledge across routers/services while preserving existing delete/metadata invalidation behavior.
+
+**Alternatives considered:**
+- Invalidate all cache groups on every write -- rejected due to unnecessary churn and increased cache miss load.
+- Perform direct cache invalidation in each router with raw prefixes -- rejected to avoid duplicated, drift-prone cache-key coupling.
+
+**Key files:** `server/services/query.py`, `server/routers/dashboard.py`, `tests/server/services/test_query_service_metadata.py`, `docs/tasks/P8-06.md`.
+
+---
+
+## DEC-059: Single-event metadata updates use optimistic concurrency tokens (2026-05-15)
+
+**Context:** Phase 8 required protection against lost updates when multiple users edit the same event metadata. The existing `PUT /api/v1/dashboard/events/{event_id}/metadata` path accepted blind writes and could overwrite a newer edit.
+
+**Decision:** Require `if_unmodified_since` on single-event metadata update requests and enforce the check atomically in storage by updating only when `dim_event.updated_at` still matches the caller-provided value (including `NULL` for never-updated rows). Return HTTP `409 Conflict` when the token is stale.
+
+**Rationale:** This provides a minimal optimistic concurrency contract without adding locks or changing the existing connection model. The atomic SQL predicate prevents race windows between read and write.
+
+**Alternatives considered:**
+- Keep blind last-write-wins updates -- rejected because it can silently discard another user's edit.
+- Add pessimistic locking -- rejected as unnecessary complexity for the current single-node DuckDB architecture.
+
+**Key files:** `server/models/dashboard.py`, `server/services/query.py`, `server/storage/database.py`, `server/routers/dashboard.py`, `tests/server/services/test_query_service_metadata.py`, `tests/server/routers/test_dashboard_router.py`, `docs/tasks/P8-07.md`.
+
+---
+
+## DEC-060: Env-primary LAN HTTP deployment path (2026-05-15)
+
+**Context:** Production deployment needed to stay lightweight for a trusted local network while removing friction from machine-specific ports, hostnames, CORS origins, secrets, and version/status visibility. Existing Dockerfiles were present, but Compose docs drifted from the repository and the client image default baked `localhost` as the API origin.
+
+**Decision:** Make deployment configuration env-primary: `deployment/.env.production` owns machine-specific values and secrets, while YAML remains readable app defaults/templates. Implement the first production path as LAN HTTP with separate frontend/backend ports, explicit CORS origins, and `ALLOW_INSECURE_COOKIES=true` only for trusted internal networks. Keep the reverse-proxy/single-origin path as future optional hardening.
+
+**Rationale:** This matches the current operational model with the fewest moving parts. Operators can deploy by editing one env file and running one script, while the app still fails fast on missing secrets and exposes app/database schema status for troubleshooting.
+
+**Alternatives considered:**
+- YAML-primary deployment config -- rejected because Docker/server operators expect env files for machine-specific values and secrets.
+- Env-only runtime config -- rejected as a larger refactor from the existing YAML-backed settings model.
+- Reverse proxy first -- deferred because it improves cookie/CORS ergonomics but adds another service and configuration layer.
+
+**Key files:** historical `Dashboard/deployment/docker-compose.yml`, `Dashboard/deployment/.env.production.example`, `Dashboard/deployment/deploy.sh`, `Dashboard/deployment/README.md`, `.env.example`, `server/config.py`, `server/routers/info.py`, `client/Dockerfile`, `client/src/components/layout/VersionLabel.tsx`, `docs/tasks/P9-06.md`. Superseded by DEC-061.
+
+---
+
+## DEC-061: Canonical repo-level release bundle (2026-05-15)
+
+**Context:** The repository had parallel deployment stories: the older `Dashboard/deployment/` build-on-host Compose path and the repo-level `Deployment/` release bundle that packages versioned images, release notes, checksums, and Windows/Linux deploy scripts. Keeping both made release instructions noisy and error-prone.
+
+**Decision:** Make the repo-level `Deployment/` bundle the only supported production deployment path. Keep `AGENT.md` as the canonical agent release runbook, keep `Deployment/README.md` as the operator handoff guide copied into bundles, and remove the legacy `Dashboard/deployment/` assets.
+
+**Rationale:** The release bundle has lower operator entropy: two handoff files, one required secret, one LAN URL, same-origin proxy routing, generated `RELEASE_NOTES.md`, and no per-host rebuild.
+
+**Key files:** `AGENT.md`, `Deployment/release.sh`, `Deployment/build.sh`, `Deployment/docker-compose.yml`, `Deployment/.env.example`, `Deployment/scripts/deploy.sh`, `Deployment/scripts/deploy.ps1`, `Deployment/README.md`.
+
+---
+
+## DEC-062: Database portability transfers load data only (2026-05-19)
+
+**Context:** The hidden Parquet ZIP portability flow exported and imported every DuckDB base table, including target-local users, sessions, saved filters, audit history, and admin custom-field configuration. The intended operator workflow is moving uploaded load data from a source host to a target host while retaining target admin-created accounts and configuration.
+
+**Decision:** Repurpose the existing admin-only `/api/v1/export/database/parquet/*` flow as load-data portability. Exports include only events, measurements, channel maps, ingestion artifacts, event custom-field values, schema/load SQL, schema metadata, and managed channel-map artifacts. Imports replace target load data transactionally while preserving target-local account/configuration tables. DEC-063 supersedes the portable inclusion of ingestion artifacts and managed channel-map files.
+
+**Rationale:** The feature was hidden in the UI, so changing semantics before exposure avoids maintaining two near-duplicate portability systems. The load-data boundary matches the operator requirement, keeps the UI simple, and reduces the risk of replacing production admin accounts during a host transfer.
+
+**Alternatives considered:**
+- Keep full-database portability and expose it with warnings -- rejected because it can replace target admin accounts.
+- Add a second load-data endpoint family -- rejected to avoid duplicate API/UI paths and higher maintenance cost.
+- Merge imported data into target load data -- deferred because conflict handling and artifact cleanup would add significant complexity.
+
+**Key files:** `server/storage/database.py`, `server/services/export.py`, `server/routers/export.py`, `client/src/components/upload/DatabaseSidePanel.tsx`, `client/src/components/upload/DatabaseSection.tsx`, `client/src/components/upload/DatabaseOperationModal.tsx`, `client/src/hooks/use-database-operation.ts`, `Deployment/README.md`.
+
+---
+
+## DEC-063: Portable load-data exports omit retained upload artifacts (2026-05-19)
+
+**Context:** DEC-041 kept missing-channel-map uploads reprocessable by retaining converted CSV bytes under `data/artifacts/channel-map`, and DEC-062 initially moved those files in Parquet ZIP portability. A production-sized export showed that a ~2 GiB ZIP could expand to roughly 24 GiB because retained raw/converted CSV artifacts dominated the archive footprint.
+
+**Decision:** Treat retained upload artifacts as source-local operational state. Portable load-data exports include processed program, event, channel-map, measurement, and event custom-field tables, but exclude `ingestion_artifacts` and the `managed_artifacts/channel-map` filesystem tree. Imports clear target load data, ignore legacy `ingestion_artifacts` load statements, skip `managed_artifacts` members during ZIP extraction, and remove target retained artifact files after a successful replacement.
+
+**Rationale:** Host-to-host portability is for transferring plottable load data, not preserving unfinished channel-map work. Excluding retained files keeps export ZIPs and extraction scratch space proportional to processed data while still preserving target users and configuration. Operators who need pending uploads on another host can complete channel-map setup before exporting or re-upload the raw files on the target.
+
+**Alternatives considered:**
+- Continue exporting retained artifacts -- rejected because raw artifact trees can dominate ZIP and extract size.
+- Export only metadata rows without files -- rejected because it would create pending versions on the target that cannot be processed without re-upload.
+- Add a second “full artifact backup” mode -- deferred because the current requirement is smaller portability, not archival raw-file backup.
+
+**Key files:** `server/storage/database.py`, `server/services/export.py`, `tests/server/services/test_export_service.py`, `Deployment/README.md`, `docs/brainstorm/07_database_import/00_OVERVIEW.md`, `docs/tasks/P2-13.md`.
+
+---
+
+## DEC-064: Damage inspection calculates from DuckDB full-channel raw rows (2026-05-21)
+
+**Context:** Inspect Damage needs per-event damage values for the first 21 RSP data channels. Existing `measurements_raw` stored only channel-map columns, while retained converted CSV artifacts contained the full source channels but are source-local operational state and are excluded from portable load-data exports.
+
+**Decision:** Extend `measurements_raw` with nullable damage-channel metadata (`channel_key`, `channel_index`, `channel_unit`) and store the first 21 data channels as `Ch01`-`Ch21` during ingestion. Compute damage on demand through authenticated `/api/v1/damage/inspect` using the notebook-defined `py_fatigue` rainflow and DNV Curve C Palmgren-Miner method. Provide a one-time artifact backfill script for existing same-host uploads.
+
+**Rationale:** DuckDB-backed calculation gives the feature one runtime source of truth and avoids normal operation depending on retained artifact paths. The backfill script covers existing uploads without adding a permanent hybrid DB-or-artifact query path.
+
+**Alternatives considered:**
+- Read retained converted CSV artifacts on every damage request -- rejected because artifacts are same-host staging material and excluded from portable exports.
+- Add a persisted `damage_results` table -- deferred; v1 uses explicit compute-on-read to avoid stale result invalidation and background-job machinery.
+- Share Dashboard plotted selection state with Inspect Damage -- rejected to avoid surprising cross-route side effects.
+
+**Key files:** `server/services/fatigue_damage.py`, `server/routers/damage.py`, `server/schema.yaml`, `client/src/app/inspect-damage/page.tsx`, `scripts/backfill-fatigue-channels.sh`.
+
+---
+
+## DEC-065: Damage inspection channels are detected from load-channel headers (2026-05-22)
+
+**Context:** Real RSP-converted CSV files can contain more than the original 21 damage columns, including force and moment headers such as `LCABushingF P_UG_X Momt` and `ShockLwBsh P_UG_Z Momt`. The fixed first-21 positional extraction dropped later load channels and the Inspect Damage UI exposed compact `ChNN` keys instead of readable source names.
+
+**Decision:** Detect damage-inspection channels from parsed CSV/RSP titles by selecting source-order numeric columns from the data section whose cleaned title contains `P_UG_` and `Force` or `Momt`. Preserve compact source-order keys (`Ch01`, `Ch02`, ... `ChNN`) for storage/API lookup, but store and display cleaned source labels as `channel_name`. Retained-artifact backfill uses the same detector.
+
+**Rationale:** Header-based detection keeps the implementation deterministic and simple while avoiding the incorrect 21-column cap. Keeping `ChNN` as an internal key preserves the existing row/cell API shape, while readable labels make the UI match the source data.
+
+**Alternatives considered:**
+- Keep exactly 21 channels and only improve labels -- rejected because source files contain valid load channels beyond column 21.
+- Use semantic slug keys derived from headers -- rejected to avoid key churn and duplicate-name collision handling.
+- Add a heavy fuzzy-matching dependency -- rejected because the current source headers have enough structure for deterministic matching.
+
+**Key files:** `server/services/etl/transformer.py`, `server/services/ingestion.py`, `server/services/damage_backfill.py`, `client/src/app/inspect-damage/page.tsx`, `tests/server/services/test_data_transformer.py`.
+
+---
+
+## DEC-066: Inspect Damage derives from plot-channel mappings (2026-05-22)
+
+**Context:** Inspect Damage only needs the 12 load channels used by the dashboard plot channel map: BJ X/Y/Z Force, Shock X/Y/Z Force, Bushing F X/Y/Z Momt, and Bushing R X/Y/Z Momt. The previous full-channel design added damage-only metadata columns to `measurements_raw` and re-read retained artifacts to populate every detected `P_UG_` force/moment channel, including channels not used for plotting.
+
+**Decision:** Use `dim_channel_map` as the source of the 12 Inspect Damage channel definitions and `measurements_raw.channel_name` as the source of processed raw time-series values. Keep `ingestion_artifacts` only as staging/preview state for uploads without a channel map. Remove branch-only damage metadata columns (`channel_key`, `channel_index`, `channel_unit`) and the full-channel backfill path.
+
+**Rationale:** The plot-channel model avoids a second damage-specific storage path, keeps RSP and CSV uploads flowing through the same parsed-header/raw-measurement model, and makes the channel map the single editable mapping source for both plots and Inspect Damage.
+
+**Alternatives considered:**
+- Keep full-channel damage storage and artifact backfill -- rejected as unnecessary for the plot-channel-only requirement and higher operational entropy.
+- Add a channel-header registry table -- rejected because processed headers already live in `measurements_raw.channel_name`, while pending previews are operational staging.
+- Infer damage channels from every distinct raw channel name -- rejected because Inspect Damage should use the fixed 12-channel map, not every stored channel.
+
+**Key files:** `server/services/damage_channels.py`, `server/services/query.py`, `server/services/ingestion.py`, `server/storage/data_backfills.py`, `server/schema.yaml`, `client/src/app/inspect-damage/page.tsx`.

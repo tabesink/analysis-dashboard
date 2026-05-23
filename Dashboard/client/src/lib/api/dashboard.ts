@@ -78,6 +78,9 @@ export const dashboardApi = {
     return post<EventsResponse>(`/api/v1/dashboard/events${params}`, request);
   },
 
+  getEventsByIds: (eventIds: string[]) =>
+    post<EventsResponse>('/api/v1/dashboard/events/by-ids', { event_ids: eventIds }),
+
   updateEventMetadata: (eventId: string, payload: EventMetadataUpdateRequest) =>
     put<EventMetadata>(
       `/api/v1/dashboard/events/${encodeURIComponent(eventId)}/metadata`,

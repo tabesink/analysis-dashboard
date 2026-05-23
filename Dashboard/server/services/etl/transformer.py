@@ -32,7 +32,13 @@ class DataTransformer:
             Long-format DataFrame with columns: timestamp, channel_name, value
         """
         if df.empty:
-            return pd.DataFrame(columns=["timestamp", "channel_name", "value"])
+            return pd.DataFrame(
+                columns=[
+                    "timestamp",
+                    "channel_name",
+                    "value",
+                ]
+            )
 
         # Get timestamp column
         if timestamp_col < len(df.columns):
@@ -52,7 +58,7 @@ class DataTransformer:
         # Build long-format records
         records: list[dict[str, Any]] = []
 
-        for col_idx in columns_to_extract:
+        for col_idx in sorted(columns_to_extract):
             if col_idx >= len(df.columns):
                 continue
 

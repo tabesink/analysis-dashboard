@@ -1,11 +1,56 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Added
+- Inspect Damage calculates per-event fatigue damage for the 12 canonical channels derived from the existing plot channel map.
+
+### Changed
+- Inspect Damage now uses canonical column labels such as `BJ X Force` and `Bushing F Z Momt`, backed by existing `measurements_raw` plot-channel rows.
+
+## [1.3.7] - 2026-05-19
+
+### Changed
+- Staging Parquet import tunes DuckDB for large ZIPs: `preserve_insertion_order=false`, single-threaded load, 10GB staging memory limit (configurable), and a reduced live-connection cap during import.
+- Docker server `mem_limit` increased to 12 GiB to match multi-gigabyte measurement imports.
+- Load-data export/import now omits retained raw CSV/RSP artifacts and `ingestion_artifacts`, so portable ZIPs carry processed load data only and legacy `managed_artifacts` entries are skipped during import.
+- Deployment docs clarify disk vs RAM after artifact exclusion: plan for extracted Parquet tables, staging DB, backup, and scratch margin rather than retained raw files.
+
+## [1.3.6] - 2026-05-19
+
+### Changed
+- Parquet import/export task status is persisted under `data/tmp/parquet-tasks` so polling survives API restarts; orphaned running tasks are marked failed on startup.
+- Large imports now load into an isolated `dashboard.db.staging` file and atomically replace the live database only after success, so a crash or segfault during load no longer leaves a partial `dashboard.db`. Load-data tables commit per table to reduce peak memory.
+- Docker server healthcheck uses `/health/live` instead of `/health/ready` so DuckDB probes do not run against a locked database during import.
+
+### Fixed
+- Import UI no longer shows only “task state no longer available” when the server restarts mid-import: it recovers persisted task status or compares live event counts to the archive when possible.
+- Readiness returns immediately while a background import is active, avoiding healthcheck hangs during heavy Parquet loads.
+
+## [1.3.5] - 2026-05-19
+
+### Changed
+- Database import backup step reports byte-level progress during `dashboard.db` copy and shows clearer copy in the import dialog while backing up.
+
+## [1.3.4] - 2026-05-19
+
+### Changed
+- Database import progress now reports backup, load-data, and finalization phases, retries transient server gateway errors during heavy imports, and pauses background data-version polling while an import is active.
+
+### Fixed
+- Changelog page loads in production Docker images (`CHANGELOG.md` is bundled at `/app/CHANGELOG.md`).
+- React hydration error (#418) from nested `<main>` elements in the app shell layout.
+
+## [1.3.3] - 2026-05-19
+
+### Fixed
+- LAN Docker proxy now streams large database import uploads to the API instead of buffering them on the proxy's small cache tmpfs, and the compressed import upload limit is now 60 GiB end-to-end.
+
+## [1.3.2] - 2026-05-19
+
+### Fixed
+- Production Docker import/export now stages large Parquet ZIP temp files under `data/tmp` on the persistent data volume instead of the server container’s 128 MB `/tmp` tmpfs (fixes HTTP 500 on multi‑hundred‑MB uploads after the nginx body-size fix).
 
 ## [1.3.1] - 2026-05-19
 

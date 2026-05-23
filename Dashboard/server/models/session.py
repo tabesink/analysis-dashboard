@@ -23,6 +23,25 @@ class PartitionState(BaseModel):
     selected_event_ids: list[str] = Field(default_factory=list)
 
 
+class InspectDamageTablePreferencesState(BaseModel):
+    """Inspect Damage table UI preferences."""
+
+    visible_columns: dict[str, bool] = Field(default_factory=dict)
+    column_widths: dict[str, int | float] = Field(default_factory=dict)
+    expanded_programs: list[str] = Field(default_factory=list)
+    expanded_versions: list[str] = Field(default_factory=list)
+    sort_field: str = Field(default="job_number")
+    sort_direction: str = Field(default="asc")
+    column_filters: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class InspectDamageState(BaseModel):
+    """Inspect Damage route work queue."""
+
+    selected_event_ids: list[str] = Field(default_factory=list)
+    table_preferences: InspectDamageTablePreferencesState | None = None
+
+
 class SessionCreate(BaseModel):
     """Request body for creating a new session."""
 
@@ -30,6 +49,7 @@ class SessionCreate(BaseModel):
     global_filters: dict[str, list[str] | str] = Field(default_factory=dict)
     rendered_event_ids: list[str] = Field(default_factory=list)
     ui_preferences: UIPreferences | None = None
+    inspect_damage_state: InspectDamageState | None = None
 
 
 class SessionUpdate(BaseModel):
@@ -39,6 +59,7 @@ class SessionUpdate(BaseModel):
     global_filters: dict[str, list[str] | str] | None = None
     rendered_event_ids: list[str] | None = None
     ui_preferences: UIPreferences | None = None
+    inspect_damage_state: InspectDamageState | None = None
 
 
 class SessionResponse(BaseModel):
@@ -49,6 +70,7 @@ class SessionResponse(BaseModel):
     global_filters: dict[str, list[str] | str] = Field(default_factory=dict)
     rendered_event_ids: list[str] = Field(default_factory=list)
     ui_preferences: UIPreferences | None = None
+    inspect_damage_state: InspectDamageState | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     expires_at: datetime | None = None

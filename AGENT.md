@@ -1,94 +1,129 @@
-# AGENT.md - Release Pipeline Contract
+# AGENT.md - Release Runbook
 
-This file covers **releasing and deploying** the RSP Dashboard only. For code style, security, multi-user, schema, and any other engineering concern, read [`Dashboard/AGENTS.md`](Dashboard/AGENTS.md).
+This root file is the canonical agent runbook for cutting and packaging RSP
+Dashboard releases from this repository. For application engineering rules,
+security, schema work, and task tracking, read [`Dashboard/AGENTS.md`](Dashboard/AGENTS.md).
 
-If you have been asked to "cut release vX.Y.Z", "ship a new version", or "build a release bundle" - run the checklist in this file end-to-end and verify each phase before moving on.
+If asked to "cut a release", "ship a new version", "build the next app
+version", or prepare files under `Deployment/releases`, follow this file
+end-to-end. Operator handoff details live in [`Deployment/README.md`](Deployment/README.md).
 
-## Repo at a glance (release-relevant only)
+## Release-Relevant Files
 
 | Path | Role |
 | --- | --- |
-| `Dashboard/VERSION` | Single source of truth for the release version. |
-| `Dashboard/CHANGELOG.md` | Keep-a-Changelog file. Has an `[Unreleased]` block at the top. |
-| `Dashboard/scripts/release_version.sh` | Bumps `VERSION`, syncs `client/package.json` + `server/pyproject.toml`, regenerates `client/src/config/version.ts`, runs sync check. |
-| `Dashboard/scripts/check_version_sync.py` | Verifies the three version files agree. |
-| `Deployment/build.sh` | Preflight + builds `rsp-dashboard-{server,client}:<VERSION>` + packs `releases/rsp-dashboard-<VERSION>.tar.gz` (+ `.sha256`). |
-| `Deployment/docker-compose.yml` | LAN production stack (server + client + jwt-init). |
-| `Deployment/.env.example` | Template copied to `.env` on the prod host; only `ADMIN_SECRET` is required. |
-| `Deployment/deploy.sh` / `deploy.ps1` | One-command prod-host deploy (Linux / Windows). |
+| `release.sh` | One-command release entry point: promotes changelog notes, syncs versions, builds the bundle, verifies checksum, and prints handoff files. |
+| `Dashboard/VERSION` | Source of truth for the app version. |
+| `Dashboard/CHANGELOG.md` | Keep-a-Changelog source used to generate bundle release notes. |
+| `Dashboard/scripts/release_version.sh` | Bumps `VERSION`, syncs `client/package.json` and `server/pyproject.toml`, regenerates `client/src/config/version.ts`, and runs the sync check. |
+| `Dashboard/scripts/check_version_sync.py` | Verifies all version metadata agrees. |
+| `Deployment/release.sh` | Lower-level release wrapper: syncs version unless skipped, requires release notes, then builds the bundle. |
+| `Deployment/build.sh` | Builds server/client images and writes `Deployment/releases/rsp-dashboard-<VERSION>.tar.gz` plus `.sha256`. |
+| `Deployment/scripts/promote_unreleased.sh` | Moves `Dashboard/CHANGELOG.md` `[Unreleased]` bullets into a dated version section. |
+| `Deployment/scripts/extract_release_notes.py` | Extracts `RELEASE_NOTES.md` from the matching changelog section. |
+| `Deployment/scripts/deploy.sh` / `deploy.ps1` | Source for Linux/Windows deploy scripts; `build.sh` copies them to the bundle root as `deploy.sh` / `deploy.ps1`. |
+| `Deployment/README.md` | Human/operator guide copied into every release bundle. |
 
-## Release checklist (happy path)
+## Changelog Drafting Contract
 
-Replace `1.2.0` with the actual SemVer for this release.
+Before running root `./release.sh`, keep user-facing notes under
+`Dashboard/CHANGELOG.md` `## [Unreleased]`. The root release command promotes
+that block into `## [<VERSION>] - YYYY-MM-DD` automatically. For the next patch
+release, derive the draft only from:
 
-```bash
-# Phase 1 - bump versions in lockstep
-cd Dashboard
-./scripts/release_version.sh 1.2.0
-#   writes VERSION, client/package.json, server/pyproject.toml
-#   regenerates client/src/config/version.ts
-#   runs check_version_sync.py at the end
+- `Dashboard/docs/tasks/`
+- `Dashboard/docs/decisions/log.md`
+- `Dashboard/docs/architecture/`
 
-# Phase 2 - changelog (manual edit; no script)
-#   In Dashboard/CHANGELOG.md:
-#     - Move entries from [Unreleased] into a new section:
-#         ## [1.2.0] - YYYY-MM-DD
-#     - Leave [Unreleased] at the top, empty.
+Use this strict shape:
 
-# Phase 3 - build release bundle (dev/build host)
-cd ../Deployment
-./build.sh
-#   preflight: VERSION semver, schema.yaml parse, CHANGELOG mention
-#   produces releases/rsp-dashboard-1.2.0.tar.gz (+ .sha256)
+```markdown
+## [Unreleased]
 
-# Phase 4 - ship + deploy (prod host)
-scp releases/rsp-dashboard-1.2.0.tar.gz{,.sha256} prod-host:/tmp/
-ssh prod-host
-cd /tmp && sha256sum -c rsp-dashboard-1.2.0.tar.gz.sha256
-sudo tar xzf rsp-dashboard-1.2.0.tar.gz -C /opt
-cd /opt/rsp-dashboard-1.2.0
-cp .env.example .env && nano .env       # set ADMIN_SECRET
-chmod 600 .env
-sudo ./deploy.sh
-#   On Windows / Docker Desktop: .\deploy.ps1
+### Added
+- User-facing new capability.
+
+### Changed
+- User-facing behavior or workflow change.
+
+### Fixed
+- User-visible bug fix.
+
+### Security
+- Security-relevant change.
 ```
 
-## Per-phase verification
+Rules:
 
-Do not advance until the previous phase passes its check.
+- Omit empty categories.
+- Write from the user's/operator's perspective, not from implementation details.
+- Keep bullets short, concrete, and fluff-free.
+- Do not include brainstorm-only ideas, internal refactors with no release impact,
+  or task IDs unless they clarify a shipped change.
+- Leave `## [Unreleased]` at the top of `Dashboard/CHANGELOG.md`; the release
+  command resets it to an empty section after promotion.
+- The release section generated by the root command must be dated and match
+  `## [<VERSION>] - YYYY-MM-DD`; `Deployment/release.sh` still fails if it is
+  missing or empty.
+
+## Release Checklist
+
+Replace `1.2.4` with the target SemVer. For "next patch", increment the patch
+component in `Dashboard/VERSION`.
+
+```bash
+./release.sh 1.2.4
+```
+
+`./release.sh` produces:
+
+- `Deployment/releases/rsp-dashboard-<VERSION>.tar.gz`
+- `Deployment/releases/rsp-dashboard-<VERSION>.tar.gz.sha256`
+
+Those two files are the handoff artifact. The tarball includes Docker images,
+`docker-compose.yml`, deploy scripts, `README.md`, `RELEASE_NOTES.md`, `VERSION`,
+and checksums. Use [`Deployment/README.md`](Deployment/README.md) for Windows,
+Linux, smoke-test, and day-2 commands.
+
+Lower-level commands remain available for troubleshooting:
+
+- `Dashboard/scripts/release_version.sh <VERSION>` only bumps and verifies version metadata.
+- `Deployment/release.sh <VERSION>` validates an existing changelog section and builds the bundle.
+- `Deployment/build.sh` rebuilds the bundle for the already-current `Dashboard/VERSION`.
+
+## Per-Phase Verification
+
+Do not advance until the previous phase passes.
 
 | Phase | Verify |
 | --- | --- |
-| 1 | `cat Dashboard/VERSION` matches the SemVer you passed; `python3 Dashboard/scripts/check_version_sync.py` exits 0. |
-| 2 | `grep -F "1.2.0" Dashboard/CHANGELOG.md` returns a line; `[Unreleased]` block still exists and is empty. |
-| 3 | `ls Deployment/releases/rsp-dashboard-1.2.0.tar.gz` exists; `sha256sum -c Deployment/releases/rsp-dashboard-1.2.0.tar.gz.sha256` passes. |
-| 4 | `deploy.{sh,ps1}` exits 0 (it polls `/health/ready` itself); `curl http://<host>:8000/health/ready` returns HTTP 200; UI loads at `http://<host>:3000`. |
+| Version | `python3 Dashboard/scripts/check_version_sync.py` exits 0 and `Dashboard/VERSION` equals the target SemVer. |
+| Changelog | `Dashboard/CHANGELOG.md` has a non-empty `## [<VERSION>] - YYYY-MM-DD` section and keeps an empty `## [Unreleased]` at the top. |
+| Build | `Deployment/releases/rsp-dashboard-<VERSION>.tar.gz` and matching `.sha256` exist; `sha256sum -c` passes. |
+| Deploy | `deploy.sh` or `deploy.ps1` exits 0, `/health/ready` returns HTTP 200, and the UI loads at `http://<host>:3000`. |
 
-## Failure modes
-
-Mapped to the actual error strings the pipeline emits.
+## Failure Modes
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `error: VERSION='X' is not semver` | `Dashboard/VERSION` not `MAJOR.MINOR.PATCH` | Re-run `./scripts/release_version.sh <semver>` with a valid SemVer. |
-| `error: server/schema.yaml failed to parse` | Invalid YAML | Validate locally: `python3 -c "import yaml; yaml.safe_load(open('Dashboard/server/schema.yaml'))"`. Fix and retry. |
-| `warning: CHANGELOG.md does not mention v<x>` | Phase 2 was skipped | Non-fatal but means the release is undocumented. Go back, add the section, rebuild. |
-| `Version drift detected:` from `check_version_sync.py` | Hand-edited `package.json` or `pyproject.toml` | Re-run `Dashboard/scripts/release_version.sh <semver>` instead of editing by hand. |
-| `error: ADMIN_SECRET in .env is still 'changeme'` | Phase 4 `.env` edit was skipped | Edit `.env`, set a real password, `chmod 600 .env`, re-run `./deploy.sh`. |
-| `error: ADMIN_SECRET must be set in .env` from compose | `.env` missing or `ADMIN_SECRET` empty | `cp .env.example .env`, edit, retry. |
-| Server fails with `auth_cookie_secure must be true` | `ALLOW_INSECURE_COOKIES` not propagated | Confirm the bundled `docker-compose.yml` still sets `ALLOW_INSECURE_COOKIES=true` for the server. |
-| Image runs old code after `deploy.sh` | An older `IMAGE_TAG` is set in `.env` | Either remove `IMAGE_TAG` from `.env` (the bundle's compose pins to the bundle's VERSION by default) or set `IMAGE_TAG=<new VERSION>`. |
-| `npm run build` fails on missing `VERSION` or `schema.yaml` inside Docker | Client build context regressed off `Dashboard/` | Confirm `Deployment/build.sh` builds the client image with `"$DASHBOARD_DIR"` as context, not `"$DASHBOARD_DIR/client"`. |
+| `error: VERSION='X' is not semver` | `Dashboard/VERSION` is not deployable SemVer. | Re-run `Dashboard/scripts/release_version.sh <semver>`. |
+| `Version drift detected:` | Version files were hand-edited or only partly updated. | Re-run `Dashboard/scripts/release_version.sh <semver>`. |
+| `error: CHANGELOG.md [Unreleased] section is empty` | There are no release notes to promote. | Add user-facing bullets under `## [Unreleased]`, then retry root `./release.sh <VERSION>`. |
+| `error: release notes section for <VERSION> not found` | `Dashboard/CHANGELOG.md` is missing the required release section. | Add `## [<VERSION>] - YYYY-MM-DD` with at least one bullet, then retry. |
+| `error: release notes section for <VERSION> is empty` | The changelog heading exists but has no release content. | Add concise release notes under the heading. |
+| `error: server/schema.yaml failed to parse` | Invalid YAML in the server schema. | Validate and fix `Dashboard/server/schema.yaml`, then retry. |
+| `error: ADMIN_SECRET in .env is still 'changeme'` | Operator did not configure the bundled `.env`. | Edit `.env`, set a real `ADMIN_SECRET`, then re-run deploy. |
+| Image runs old code after deploy | `.env` overrides `IMAGE_TAG` to an older version. | Remove `IMAGE_TAG` from `.env` or set it to the new version. |
+| Client build cannot find `VERSION` or `schema.yaml` | Client Docker build context regressed. | Ensure `Deployment/build.sh` builds the client with `"$DASHBOARD_DIR"` as context. |
 
-## Hard rules
+## Hard Rules
 
-- **Always** bump versions via `Dashboard/scripts/release_version.sh`. It is the only thing that keeps `VERSION`, `client/package.json`, and `server/pyproject.toml` aligned.
-- **Never** hand-edit `Dashboard/client/src/config/version.ts`, `filters.ts`, or `settings.ts`. They are regenerated on every Docker build by `Dashboard/client/scripts/generate-*.js`.
-- **Never** delete `Dashboard/VERSION` or `Dashboard/server/schema.yaml`. The build's `preflight()` will hard-fail.
-- **Never** run `Deployment/build.sh` from outside the `Deployment/` directory. Its paths are relative.
-- **Never** commit `Deployment/.env`. It contains `ADMIN_SECRET`. The folder's `.gitignore` already excludes it; keep it that way.
-- **Never** expose this stack to the public internet. It serves plain HTTP and runs with `ALLOW_INSECURE_COOKIES=true`. For internet-facing deployments, terminate TLS in a reverse proxy and revert that flag.
-
-## Out of scope here
-
-Anything that is not "bump version, update changelog, build, ship, deploy" lives in [`Dashboard/AGENTS.md`](Dashboard/AGENTS.md). Do not duplicate that content in this file.
+- Always bump versions via `Dashboard/scripts/release_version.sh`.
+- Never hand-edit `Dashboard/client/src/config/version.ts`, `filters.ts`, or
+  `settings.ts`; they are generated by client scripts.
+- Never delete `Dashboard/VERSION`, `Dashboard/CHANGELOG.md`, or
+  `Dashboard/server/schema.yaml`; release preflight depends on them.
+- Never run `Deployment/build.sh` from outside `Deployment/`.
+- Never commit `Deployment/.env`; it contains `ADMIN_SECRET`.
+- Never expose the bundled LAN stack directly to the public internet. It serves
+  plain HTTP and deliberately sets `ALLOW_INSECURE_COOKIES=true`.

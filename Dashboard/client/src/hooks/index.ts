@@ -13,3 +13,6 @@ export { useLazyPlotFetch } from './use-lazy-plot-fetch';
 export { useTabVisibility } from './use-tab-visibility';
 export { useDatabaseOperation } from './use-database-operation';
 export { useEventTreeColorProps } from './use-event-tree-color-props';
+export { useDataVersionSync } from './use-data-version-sync';
+export { useInspectDamageState } from './use-inspect-damage-state';
+export { useInspectDamageSelectedEvents } from './use-inspect-damage-selected-events';

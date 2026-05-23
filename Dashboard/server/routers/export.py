@@ -20,7 +20,8 @@ settings = get_settings()
 audit_log = get_audit_logger()
 MAX_UPLOAD_BYTES = settings.max_upload_size_mb * 1024 * 1024
 CHUNK_SIZE = 8 * 1024 * 1024
-STALL_THRESHOLD_SEC = 120  # 2 minutes with no heartbeat = likely dead thread
+STALL_THRESHOLD_EXPORT_SEC = 120  # 2 minutes with no heartbeat = likely dead export thread
+STALL_THRESHOLD_IMPORT_SEC = 900  # 15 minutes; large backup + Parquet loads can be slow
 
 
 class DatabaseInfoResponse(BaseModel):
@@ -79,12 +80,14 @@ class TaskStatusResponse(BaseModel):
     status: str
     progress: str
     phase: str = ""
+    sub_phase: str = ""
     current: int
     total: int
     current_table: str | None = None
     events_loaded: int | None = None
     error: str | None = None
     result: dict[str, Any] | None = None
+    updated_at: float = 0.0
 
 
 def _validation_warnings(compat: dict[str, Any]) -> list[str]:
@@ -107,7 +110,9 @@ def _validation_warnings(compat: dict[str, Any]) -> list[str]:
 
 async def stream_upload_to_disk(file: UploadFile, max_bytes: int) -> Path:
     """Stream upload to a temp file; enforce max compressed size."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    scratch = settings.scratch_dir
+    scratch.mkdir(parents=True, exist_ok=True)
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False, dir=str(scratch))
     tmp_path = Path(tmp.name)
     total = 0
     try:
@@ -179,11 +184,15 @@ async def get_parquet_task_status(
 
     if t.status == "running" and t.updated_at > 0:
         elapsed = time.time() - t.updated_at
-        if elapsed > STALL_THRESHOLD_SEC:
+        stall_threshold = (
+            STALL_THRESHOLD_IMPORT_SEC if t.kind == "import" else STALL_THRESHOLD_EXPORT_SEC
+        )
+        if elapsed > stall_threshold:
+            stall_minutes = int(stall_threshold // 60)
             _update_task(
                 task_id,
                 status="failed",
-                error="Task stalled — no progress for 2 minutes",
+                error=f"Task stalled — no progress for {stall_minutes} minutes",
                 progress="Failed (stalled)",
                 phase="failed",
             )
@@ -197,12 +206,14 @@ async def get_parquet_task_status(
         status=t.status,
         progress=t.progress,
         phase=t.phase,
+        sub_phase=t.sub_phase,
         current=t.current,
         total=t.total,
         current_table=t.current_table,
         events_loaded=t.events_loaded,
         error=t.error,
         result=t.result,
+        updated_at=t.updated_at,
     )
 
 
@@ -237,7 +248,7 @@ async def download_parquet_export(
         extra={
             "event": "db_export_completed",
             "request_id": task_id,
-            "filename": zp.name,
+            "export_filename": zp.name,
             "bytes": zp.stat().st_size if zp.is_file() else None,
         },
     )
@@ -288,7 +299,7 @@ async def upload_parquet_export_for_import(
         extra={
             "event": "db_import_started",
             "request_id": upload_id,
-            "filename": file.filename,
+            "upload_filename": file.filename,
             "bytes": tmp_path.stat().st_size if tmp_path.is_file() else None,
             "rows": result.get("event_count"),
         },
@@ -341,9 +352,9 @@ async def start_parquet_import(
     except ValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     audit_log.info(
-        "db import completed",
+        "db import started",
         extra={
-            "event": "db_import_completed",
+            "event": "db_import_started",
             "request_id": task_id,
             "reason": f"upload={upload_id}",
         },

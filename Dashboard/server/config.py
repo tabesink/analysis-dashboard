@@ -5,6 +5,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 from pydantic import Field, model_validator
@@ -17,6 +18,42 @@ def load_yaml_config(yaml_path: Path) -> dict[str, Any]:
         with open(yaml_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     return {}
+
+
+def _parse_bool_env(value: str) -> bool:
+    """Parse boolean environment values used by deployment scripts."""
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _apply_env_overrides(config: dict[str, Any], overrides: dict[str, tuple[str, Any]]) -> None:
+    """Make selected environment variables win over YAML init kwargs."""
+    for field_name, (env_name, caster) in overrides.items():
+        raw_value = os.getenv(env_name)
+        if raw_value is None:
+            continue
+        value = raw_value.strip()
+        if value == "":
+            continue
+        config[field_name] = caster(value)
+
+
+def _normalize_cors_origin(origin: str) -> str:
+    """Normalize origin casing to match browser Origin headers."""
+    value = origin.strip()
+    if value == "*":
+        return value
+    parsed = urlsplit(value)
+    if not parsed.scheme or not parsed.netloc:
+        return value
+    return urlunsplit(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            parsed.path.rstrip("/"),
+            "",
+            "",
+        )
+    )
 
 
 class RateLimitingSettings(BaseSettings):
@@ -111,6 +148,12 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = Field(default=500)
     max_events_per_query: int = Field(default=200)
 
+    # DuckDB tuning for staging load-data import (Parquet COPY into dashboard.db.staging)
+    duckdb_import_memory_limit: str = Field(default="10GB")
+    duckdb_import_threads: int = Field(default=1, ge=1)
+    # Cap the live connection while import runs so staging can use most of the container budget
+    duckdb_live_memory_limit_during_import: str = Field(default="1GB")
+
     # Performance
     enable_performance_metrics: bool = Field(default=True)
 
@@ -176,6 +219,11 @@ class Settings(BaseSettings):
         """Path to the unified DuckDB file containing all data."""
         return self.data_root / "dashboard.db"
 
+    @property
+    def scratch_dir(self) -> Path:
+        """Writable temp space for large ZIP upload/validate/import (uses data volume in Docker)."""
+        return self.data_root / "tmp"
+
     def model_post_init(self, __context: Any) -> None:
         """Ensure paths are Path objects."""
         if isinstance(self.data_root, str):
@@ -207,15 +255,44 @@ def create_settings_from_yaml(yaml_path: Path | None = None) -> Settings:
     # app_env is the source of truth for these core runtime defaults unless
     # the operator explicitly overrides via environment variables.
     yaml_config["app_env"] = app_env
-    if "HOST" not in os.environ:
-        yaml_config["host"] = "127.0.0.1" if app_env == "development" else "0.0.0.0"
-    if "DEBUG" not in os.environ:
+    yaml_config["host"] = os.getenv(
+        "HOST",
+        "127.0.0.1" if app_env == "development" else "0.0.0.0",
+    )
+    if "DEBUG" in os.environ:
+        yaml_config["debug"] = _parse_bool_env(os.environ["DEBUG"])
+    else:
         yaml_config["debug"] = app_env == "development"
+
+    _apply_env_overrides(
+        yaml_config,
+        {
+            "port": ("PORT", int),
+            "log_level": ("LOG_LEVEL", str),
+            "admin_secret": ("ADMIN_SECRET", str),
+            "jwt_expiry_hours": ("JWT_EXPIRY_HOURS", int),
+            "auth_cookie_name": ("AUTH_COOKIE_NAME", str),
+            "auth_cookie_samesite": ("AUTH_COOKIE_SAMESITE", str),
+            "auth_cookie_domain": ("AUTH_COOKIE_DOMAIN", str),
+            "data_root": ("DATA_ROOT", Path),
+            "log_dir": ("LOG_DIR", Path),
+            "max_upload_size_mb": ("MAX_UPLOAD_SIZE_MB", int),
+            "max_events_per_query": ("MAX_EVENTS_PER_QUERY", int),
+            "duckdb_import_memory_limit": ("DUCKDB_IMPORT_MEMORY_LIMIT", str),
+            "duckdb_import_threads": ("DUCKDB_IMPORT_THREADS", int),
+            "duckdb_live_memory_limit_during_import": (
+                "DUCKDB_LIVE_MEMORY_LIMIT_DURING_IMPORT",
+                str,
+            ),
+        },
+    )
     allow_insecure_cookies_env = os.getenv("ALLOW_INSECURE_COOKIES", "").strip().lower()
     allow_insecure_cookies = allow_insecure_cookies_env in {"1", "true", "yes", "on"}
     if allow_insecure_cookies:
         yaml_config["allow_insecure_cookies"] = True
-    if "AUTH_COOKIE_SECURE" not in os.environ:
+    if "AUTH_COOKIE_SECURE" in os.environ:
+        yaml_config["auth_cookie_secure"] = _parse_bool_env(os.environ["AUTH_COOKIE_SECURE"])
+    else:
         # In production, default to secure cookies UNLESS the operator has
         # explicitly opted into the LAN/intranet escape hatch.
         yaml_config["auth_cookie_secure"] = (
@@ -272,6 +349,10 @@ def create_settings_from_yaml(yaml_path: Path | None = None) -> Settings:
             yaml_config["cors_origins"] = parsed
     elif cors_indexed:
         yaml_config["cors_origins"] = [value for _, value in cors_indexed]
+    if "cors_origins" in yaml_config:
+        yaml_config["cors_origins"] = [
+            _normalize_cors_origin(origin) for origin in yaml_config["cors_origins"]
+        ]
 
     # Handle nested settings
     rate_limiting_config = yaml_config.pop("rate_limiting", {})

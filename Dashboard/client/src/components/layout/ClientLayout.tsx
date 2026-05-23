@@ -32,9 +32,9 @@ export default function ClientLayout({ children }: ClientLayoutProps) {
         <AppSidebar />
         <SidebarInset className="min-h-0 flex flex-col overflow-hidden">
           <SiteHeader />
-          <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
             {children}
-          </main>
+          </div>
         </SidebarInset>
       </div>
     </SidebarProvider>

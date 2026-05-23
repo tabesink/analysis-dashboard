@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from server.dependencies import CurrentUserDep, SessionManagerDep
 from server.models.session import (
+    InspectDamageState,
     PartitionState,
     SessionCreate,
     SessionResponse,
@@ -26,6 +27,11 @@ async def create_session(
         "global_filters": request.global_filters,
         "rendered_event_ids": request.rendered_event_ids,
         "ui_preferences": request.ui_preferences.model_dump() if request.ui_preferences else None,
+        "inspect_damage_state": (
+            request.inspect_damage_state.model_dump()
+            if request.inspect_damage_state
+            else None
+        ),
     }
 
     session_id = session_manager.create(current_user["id"], session_data)
@@ -81,6 +87,9 @@ async def update_session(
     if request.ui_preferences is not None:
         update_data["ui_preferences"] = request.ui_preferences.model_dump()
 
+    if request.inspect_damage_state is not None:
+        update_data["inspect_damage_state"] = request.inspect_damage_state.model_dump()
+
     if not session_manager.update(session_id, current_user["id"], update_data):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -121,12 +130,17 @@ def _session_to_response(session: dict) -> SessionResponse:
     if session.get("ui_preferences"):
         ui_preferences = UIPreferences(**session["ui_preferences"])
 
+    inspect_damage_state = None
+    if session.get("inspect_damage_state"):
+        inspect_damage_state = InspectDamageState(**session["inspect_damage_state"])
+
     return SessionResponse(
         session_id=session["session_id"],
         data_state=data_state,
         global_filters=session.get("global_filters") or {},
         rendered_event_ids=session.get("rendered_event_ids") or [],
         ui_preferences=ui_preferences,
+        inspect_damage_state=inspect_damage_state,
         created_at=session.get("created_at"),
         updated_at=session.get("updated_at"),
         expires_at=session.get("expires_at"),

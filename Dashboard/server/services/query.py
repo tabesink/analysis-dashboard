@@ -6,14 +6,22 @@ from pathlib import Path
 from typing import Any
 
 from server.config import Settings
+from server.modules.filter_semantics import build_filter_plan
+from server.services.damage_channels import (
+    derive_damage_channel_specs,
+    is_generic_channel_name,
+    resolve_damage_channel_name,
+)
 from server.storage.database import UnifiedStore
 from server.storage.schema_loader import get_schema_loader
-from server.utils.boolean_filters import build_boolean_filter_condition
 from server.utils.cache import CacheKeys, SimpleCache
 from server.utils.weight_ranges import apply_derived_weight_ranges
-from server.utils.weight_filters import build_weight_range_condition
 
 logger = logging.getLogger(__name__)
+
+
+class OptimisticConcurrencyError(RuntimeError):
+    """Raised when an update loses an optimistic concurrency check."""
 
 
 class QueryService:
@@ -127,45 +135,15 @@ class QueryService:
                 field["field_key"]
                 for field in self.db.get_custom_field_definitions(filterable_only=True)
             }
-
-            event_id_query = global_filters.get("event_id_query")
-            if isinstance(event_id_query, str) and event_id_query.strip():
-                conditions.append("LOWER(event_id) LIKE ?")
-                params.append(f"%{event_id_query.strip().lower()}%")
-
-            for filter_key, filter_values in global_filters.items():
-                if filter_key == "event_id_query":
-                    continue
-                if not isinstance(filter_values, list) or not filter_values:
-                    continue
-                boolean_condition = build_boolean_filter_condition(filter_key, filter_values)
-                if boolean_condition is not None:
-                    condition_sql, condition_params = boolean_condition
-                    conditions.append(condition_sql)
-                    params.extend(condition_params)
-                    continue
-                weight_condition = build_weight_range_condition(filter_key, filter_values)
-                if weight_condition is not None:
-                    condition_sql, condition_params = weight_condition
-                    conditions.append(condition_sql)
-                    params.extend(condition_params)
-                    continue
-                if filter_key in filter_column_map:
-                    column = filter_column_map[filter_key]
-                    placeholders = ", ".join(["?"] * len(filter_values))
-                    conditions.append(f"{column} IN ({placeholders})")
-                    params.extend(filter_values)
-                    continue
-                if filter_key in custom_field_keys:
-                    placeholders = ", ".join(["?"] * len(filter_values))
-                    conditions.append(
-                        "event_id IN ("
-                        "SELECT event_id FROM event_custom_field_values "
-                        f"WHERE field_key = ? AND value IN ({placeholders})"
-                        ")"
-                    )
-                    params.append(filter_key)
-                    params.extend(filter_values)
+            filter_plan = build_filter_plan(
+                filters=global_filters,
+                purpose="event_grid",
+                filter_column_map=filter_column_map,
+                custom_field_keys=custom_field_keys,
+            )
+            for condition in filter_plan.conditions:
+                conditions.append(condition.sql)
+                params.extend(condition.params)
 
         where_clause = " AND ".join(conditions)
 
@@ -200,6 +178,8 @@ class QueryService:
 
     def get_all_events(
         self,
+        program_ids: list[str] | None = None,
+        versions: list[str] | None = None,
         global_filters: dict[str, list[str] | str] | None = None,
         limit: int = 500,
         offset: int = 0,
@@ -215,6 +195,8 @@ class QueryService:
             }
         """
         events, total_count = self.get_events(
+            program_ids=program_ids,
+            versions=versions,
             global_filters=global_filters,
             limit=limit,
             offset=offset,
@@ -231,30 +213,106 @@ class QueryService:
             last_updated_by_user_id = event.get("last_updated_by_user_id")
             event["uploaded_by_username"] = usernames_by_id.get(uploaded_by_user_id)
             event["last_updated_by_username"] = usernames_by_id.get(last_updated_by_user_id)
-        existing_keys = {(event["program_id"], event["version"]) for event in events}
-        for pending in self.db.get_pending_program_versions():
-            key = (pending["program_id"], pending["version"])
-            if key in existing_keys:
-                continue
-            events.append(
-                {
-                    "event_id": f"__pending_channel_map__::{pending['program_id']}::{pending['version']}",
-                    "program_id": pending["program_id"],
-                    "version": pending["version"],
-                    "status": "Pending",
-                    "custom_fields": {},
-                    "source_file": None,
-                    "row_count": 0,
-                    "has_channel_map": False,
-                    "missing_channel_map": True,
-                    "selectable_for_plotting": False,
-                }
-            )
+        # Keep synthetic pending placeholder rows only for the unscoped dashboard
+        # catalog. Explicit scoped queries (program/version) should return real
+        # events only.
+        if not program_ids and not versions:
+            existing_keys = {(event["program_id"], event["version"]) for event in events}
+            for pending in self.db.get_pending_program_versions():
+                key = (pending["program_id"], pending["version"])
+                if key in existing_keys:
+                    continue
+                events.append(
+                    {
+                        "event_id": f"__pending_channel_map__::{pending['program_id']}::{pending['version']}",
+                        "program_id": pending["program_id"],
+                        "version": pending["version"],
+                        "status": "Pending",
+                        "custom_fields": {},
+                        "source_file": None,
+                        "row_count": 0,
+                        "has_channel_map": False,
+                        "missing_channel_map": True,
+                        "selectable_for_plotting": False,
+                    }
+                )
         return {
             "events": events,
             "total_count": total_count,
             "has_more": (offset + len(events)) < total_count,
         }
+
+    def get_damage_channel_series(self, event_ids: list[str]) -> list[dict[str, Any]]:
+        """Return plot-channel time series for damage inspection."""
+        if not event_ids:
+            return []
+
+        series: list[dict[str, Any]] = []
+        for event_id in event_ids:
+            event = self.db.get_event(event_id)
+            if event is None:
+                continue
+
+            channel_map = self.db.get_channel_map(event["program_id"], event["version"])
+            specs = derive_damage_channel_specs(channel_map)
+            raw_channel_names: list[str] | None = None
+            for spec in specs:
+                item: dict[str, Any] = {
+                    "event_id": str(event_id),
+                    "channel_key": spec.key,
+                    "channel_name": spec.label,
+                    "unit": spec.unit,
+                    "values": [],
+                }
+                if spec.error is not None:
+                    item["status"] = "unavailable"
+                    item["error"] = spec.error
+                    series.append(item)
+                    continue
+
+                lookup_channel_name = spec.channel_name
+                if is_generic_channel_name(lookup_channel_name):
+                    if raw_channel_names is None:
+                        raw_channel_names = [
+                            str(row[0])
+                            for row in self.db.read_connection.execute(
+                                """
+                                SELECT DISTINCT channel_name
+                                FROM measurements_raw
+                                WHERE event_id = ?
+                                """,
+                                [event_id],
+                            ).fetchall()
+                        ]
+                    resolution = resolve_damage_channel_name(spec, raw_channel_names)
+                    if resolution.error is not None:
+                        item["status"] = "unavailable"
+                        item["error"] = resolution.error
+                        series.append(item)
+                        continue
+                    lookup_channel_name = resolution.channel_name
+
+                rows = self.db.read_connection.execute(
+                    """
+                    SELECT value
+                    FROM measurements_raw
+                    WHERE event_id = ? AND channel_name = ?
+                    ORDER BY timestamp
+                    """,
+                    [event_id, lookup_channel_name],
+                ).fetchall()
+                if not rows:
+                    item["status"] = "unavailable"
+                    item["error"] = (
+                        f"No measurements found for mapped channel '{lookup_channel_name}'"
+                    )
+                item["values"] = [
+                    float(row[0]) if row[0] is not None else None
+                    for row in rows
+                ]
+                series.append(item)
+
+        return series
 
     def get_event_count(
         self,
@@ -432,13 +490,41 @@ class QueryService:
         if not event_ids:
             return []
 
-        events = []
+        events: list[dict[str, Any]] = []
         for event_id in event_ids:
             event = self.db.get_event(event_id)
             if event:
                 events.append(event)
-        
-        return events
+
+        if not events:
+            return []
+
+        ids = [event["event_id"] for event in events]
+        custom_field_map = self.db.get_event_custom_field_values(ids)
+        user_ids = {
+            str(user_id)
+            for event in events
+            for user_id in (
+                event.get("uploaded_by_user_id"),
+                event.get("last_updated_by_user_id"),
+            )
+            if user_id
+        }
+        usernames_by_id = self._resolve_usernames_by_id(user_ids)
+        for event in events:
+            uploaded_by_user_id = event.get("uploaded_by_user_id")
+            last_updated_by_user_id = event.get("last_updated_by_user_id")
+            event["custom_fields"] = custom_field_map.get(event["event_id"], {})
+            channel_map = self.db.get_channel_map(event["program_id"], event["version"])
+            has_channel_map = len(channel_map) > 0
+            event["has_channel_map"] = has_channel_map
+            event["missing_channel_map"] = False
+            event["selectable_for_plotting"] = has_channel_map
+            event["uploaded_by_username"] = usernames_by_id.get(uploaded_by_user_id)
+            event["last_updated_by_username"] = usernames_by_id.get(last_updated_by_user_id)
+
+        by_id = {event["event_id"]: event for event in events}
+        return [by_id[event_id] for event_id in event_ids if event_id in by_id]
 
     @staticmethod
     def _event_timestamp_value(raw_value: Any) -> float:
@@ -492,12 +578,17 @@ class QueryService:
         to invalidate the same cache groups affected by metadata writes."""
         self._invalidate_event_cache_groups()
 
+    def invalidate_filter_option_caches(self) -> None:
+        """Public entry point for writes that change filter option payloads."""
+        self.cache.invalidate_prefix(CacheKeys.FILTER_OPTIONS)
+
     def update_event_metadata(
         self,
         event_id: str,
         *,
         updates: dict[str, Any],
         current_user: dict[str, str],
+        if_unmodified_since: str | None,
     ) -> dict[str, Any]:
         """Update one event metadata row and return refreshed view model data."""
         existing = self.db.get_event(event_id)
@@ -514,7 +605,18 @@ class QueryService:
         normalized_updates = apply_derived_weight_ranges(normalized_updates, include_nulls=True)
         normalized_updates["last_updated_by_user_id"] = current_user["id"]
 
-        self.db.update_event(event_id, **normalized_updates)
+        updated_ok = self.db.update_event_if_unmodified(
+            event_id,
+            if_unmodified_since=if_unmodified_since,
+            **normalized_updates,
+        )
+        if not updated_ok:
+            latest = self.db.get_event(event_id)
+            if not latest or latest.get("is_deleted"):
+                raise LookupError(f"Event '{event_id}' not found")
+            raise OptimisticConcurrencyError(
+                "Event metadata was modified by another user. Refresh and retry."
+            )
         self.db.log_audit(
             action="metadata_update",
             event_id=event_id,

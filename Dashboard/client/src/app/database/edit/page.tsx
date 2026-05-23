@@ -31,6 +31,7 @@ import { selectCanWrite, useAuthStore } from '@/stores/auth-store';
 import { useFilterOptions } from '@/hooks/use-filter-options';
 import type { ChannelMapEditorEntry, EventMetadata, FilterOptions } from '@/types/api';
 import { dashboardApi } from '@/lib/api';
+import { getPlotDisplayTitle } from '@/config/constants';
 import { SidePanelLayout } from '@/components/shared';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
@@ -295,10 +296,9 @@ export default function FilterValuesPage() {
     queryFn: () =>
       dashboardApi.getEvents(
         {
-          global_filters: {
-            program_id: [selectedProgramId],
-            version: [selectedVersion],
-          },
+          program_ids: [selectedProgramId],
+          versions: [selectedVersion],
+          global_filters: {},
         },
         500,
       ),
@@ -828,11 +828,11 @@ export default function FilterValuesPage() {
     authStatus === 'idle' ||
     isLoading
   ) {
-    return <main className="flex-1 p-4">Loading...</main>;
+    return <div className="flex-1 p-4">Loading...</div>;
   }
 
   return (
-    <main className="flex-1 p-4 min-h-[calc(100vh-3.5rem)]">
+    <div className="flex-1 p-4 min-h-[calc(100vh-3.5rem)]">
       <div className="flex gap-0 h-[calc(100vh-7rem)]">
         <SidePanelLayout
           isCollapsed={sidePanelCollapsed}
@@ -842,7 +842,7 @@ export default function FilterValuesPage() {
           <ScrollArea className="flex-1 min-h-0 w-full">
             <div className="p-5 space-y-5">
               <div>
-                <h2 className="text-base font-semibold tracking-tight">Edit Metadata</h2>
+                <h2 className="text-base font-semibold tracking-tight">Select Dataset</h2>
                 <p className="text-xs text-muted-foreground mt-1">
                   Edit event metadata for the selected program/version.
                 </p>
@@ -951,8 +951,8 @@ export default function FilterValuesPage() {
             <Tabs defaultValue="filter-values" className="flex-1 min-h-0 flex flex-col">
               <div className="shrink-0 flex items-center justify-between border-b px-4 py-3">
                 <TabsList className="w-fit">
-                  <TabsTrigger value="filter-values">Filter Values</TabsTrigger>
-                  <TabsTrigger value="custom-fields">Channel Map</TabsTrigger>
+                  <TabsTrigger value="filter-values">Edit Metadata</TabsTrigger>
+                  <TabsTrigger value="custom-fields">Map Channels</TabsTrigger>
                 </TabsList>
                 <div className="flex items-center gap-2">
                   <Button
@@ -1249,32 +1249,35 @@ export default function FilterValuesPage() {
                             <span>x_col</span>
                             <span>y_col</span>
                           </div>
-                          {FIXED_CHANNEL_MAP_PLOTS.map((plotKey) => (
-                            <div
-                              key={plotKey}
-                              className="grid grid-cols-[1fr_96px_96px] items-center gap-2 border-b px-4 py-2"
-                            >
-                              <span className="truncate font-mono text-xs" title={plotKey}>
-                                {plotKey}
-                              </span>
-                              <Input
-                                value={channelMapDraft[plotKey]?.x_col ?? ''}
-                                onChange={(event) =>
-                                  setChannelMapValue(plotKey, 'x_col', event.target.value)
-                                }
-                                inputMode="numeric"
-                                className="h-8 text-xs"
-                              />
-                              <Input
-                                value={channelMapDraft[plotKey]?.y_col ?? ''}
-                                onChange={(event) =>
-                                  setChannelMapValue(plotKey, 'y_col', event.target.value)
-                                }
-                                inputMode="numeric"
-                                className="h-8 text-xs"
-                              />
-                            </div>
-                          ))}
+                          {FIXED_CHANNEL_MAP_PLOTS.map((plotKey) => {
+                            const plotDisplayTitle = getPlotDisplayTitle(plotKey);
+                            return (
+                              <div
+                                key={plotKey}
+                                className="grid grid-cols-[1fr_96px_96px] items-center gap-2 border-b px-4 py-2"
+                              >
+                                <span className="truncate text-xs" title={plotDisplayTitle}>
+                                  {plotDisplayTitle}
+                                </span>
+                                <Input
+                                  value={channelMapDraft[plotKey]?.x_col ?? ''}
+                                  onChange={(event) =>
+                                    setChannelMapValue(plotKey, 'x_col', event.target.value)
+                                  }
+                                  inputMode="numeric"
+                                  className="h-8 text-xs"
+                                />
+                                <Input
+                                  value={channelMapDraft[plotKey]?.y_col ?? ''}
+                                  onChange={(event) =>
+                                    setChannelMapValue(plotKey, 'y_col', event.target.value)
+                                  }
+                                  inputMode="numeric"
+                                  className="h-8 text-xs"
+                                />
+                              </div>
+                            );
+                          })}
                         </div>
                         <div className="border-t px-4 py-2 text-xs text-muted-foreground">
                           {channelMapQuery.data?.missing_channel_map && (
@@ -1319,6 +1322,6 @@ export default function FilterValuesPage() {
           </Card>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { Database } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -25,21 +25,6 @@ export function LoadDataSection({
     () => new Set(dataState.selected_event_ids),
     [dataState.selected_event_ids],
   );
-
-  useEffect(() => {
-    if (dataState.selected_event_ids.length === 0) {
-      return;
-    }
-    const selectableIds = new Set(
-      events
-        .filter((event) => event.selectable_for_plotting !== false)
-        .map((event) => event.event_id),
-    );
-    const prunedIds = dataState.selected_event_ids.filter((id) => selectableIds.has(id));
-    if (prunedIds.length !== dataState.selected_event_ids.length) {
-      updateDataState({ selected_event_ids: prunedIds });
-    }
-  }, [events, dataState.selected_event_ids, updateDataState]);
 
   const isEventChecked = useCallback(
     (eventId: string) => selectedSet.has(eventId),

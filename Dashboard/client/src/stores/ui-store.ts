@@ -13,6 +13,9 @@ interface UIState {
   activeTab: 'grid' | 'interactive';
   setActiveTab: (tab: 'grid' | 'interactive') => void;
 
+  databaseImportInProgress: boolean;
+  setDatabaseImportInProgress: (inProgress: boolean) => void;
+
   curveVisibility: Record<string, boolean>;
   toggleCurveVisibility: (eventId: string) => void;
   resetCurveVisibility: () => void;
@@ -26,6 +29,10 @@ export const useUIStore = create<UIState>((set) => ({
 
   activeTab: 'grid',
   setActiveTab: (tab) => set({ activeTab: tab }),
+
+  databaseImportInProgress: false,
+  setDatabaseImportInProgress: (inProgress) =>
+    set({ databaseImportInProgress: inProgress }),
 
   curveVisibility: {},
   toggleCurveVisibility: (eventId) =>

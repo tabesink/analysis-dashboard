@@ -87,6 +87,7 @@ async def login(
             detail="Invalid username or password",
         ) from exc
 
+    user["token_version"] = auth_service.rotate_user_session(user["id"])
     _set_auth_cookie(response, settings, auth_service, user)
     db.log_audit(
         action="AUTH_LOGIN_SUCCESS",
@@ -138,6 +139,7 @@ async def register(
         ) from exc
 
     db.update_user_last_login(user["id"])
+    user["token_version"] = auth_service.rotate_user_session(user["id"])
     _set_auth_cookie(response, settings, auth_service, user)
     db.log_audit(
         action="AUTH_REGISTER",
@@ -195,11 +197,13 @@ async def change_password(
 async def logout(
     response: Response,
     settings: SettingsDep,
+    auth_service: AuthServiceDep,
     user: OptionalUserDep,
     db: DatabaseDep,
 ) -> None:
     """Clear authentication cookie."""
     if user is not None:
+        auth_service.rotate_user_session(user["id"])
         db.log_audit(
             action="AUTH_LOGOUT",
             user_id=user["id"],

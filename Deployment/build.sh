@@ -8,10 +8,12 @@
 #     releases/rsp-dashboard-<VERSION>/
 #         images.tar           combined `docker save` of server + client
 #         docker-compose.yml
+#         nginx.conf
 #         .env.example
 #         deploy.sh
 #         deploy.ps1
 #         README.md
+#         RELEASE_NOTES.md    current version section from Dashboard/CHANGELOG.md
 #         VERSION
 #         CHECKSUMS.sha256     per-file SHA-256 of the bundle contents
 #     releases/rsp-dashboard-<VERSION>.tar.gz
@@ -38,8 +40,10 @@ preflight() {
     fi
     local version
     version="$(tr -d '[:space:]' < "$DASHBOARD_DIR/VERSION")"
-    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "error: VERSION='$version' is not semver (expected MAJOR.MINOR.PATCH)" >&2
+    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+        echo "error: VERSION='$version' is not a deployable SemVer tag" >&2
+        echo "       Use MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-prerelease." >&2
+        echo "       Build metadata with '+' is not supported in Docker image tags." >&2
         exit 1
     fi
 
@@ -53,13 +57,14 @@ preflight() {
         exit 1
     fi
 
-    if [[ -f "$DASHBOARD_DIR/CHANGELOG.md" ]]; then
-        if ! grep -q -F "$version" "$DASHBOARD_DIR/CHANGELOG.md"; then
-            echo "warning: CHANGELOG.md does not mention v$version (continuing)" >&2
-        fi
-    else
-        echo "warning: $DASHBOARD_DIR/CHANGELOG.md not found (continuing)" >&2
+    if [[ ! -f "$DASHBOARD_DIR/CHANGELOG.md" ]]; then
+        echo "error: $DASHBOARD_DIR/CHANGELOG.md not found" >&2
+        exit 1
     fi
+    python3 "$DEPLOY_DIR/scripts/extract_release_notes.py" \
+        --changelog "$DASHBOARD_DIR/CHANGELOG.md" \
+        --version "$version" \
+        >/dev/null
 
     command -v docker >/dev/null 2>&1 \
         || { echo "error: docker not found in PATH" >&2; exit 1; }
@@ -88,6 +93,7 @@ docker build \
 echo "==> Building client image (rsp-dashboard-client:${VERSION})"
 docker build \
     -t "rsp-dashboard-client:${VERSION}" \
+    --build-arg NEXT_PUBLIC_API_MODE=same-origin \
     -f "$DASHBOARD_DIR/client/Dockerfile" \
     "$DASHBOARD_DIR"
 
@@ -105,15 +111,20 @@ docker save \
 # Update the compose file's IMAGE_TAG default to match this VERSION so
 # operators don't need to set IMAGE_TAG in .env unless they want to override.
 # ---------------------------------------------------------------------------
-echo "==> Bundling compose, env example, deploy scripts, README"
-sed -E "s|\\\$\\{IMAGE_TAG:-[0-9]+\\.[0-9]+\\.[0-9]+\\}|\\\${IMAGE_TAG:-${VERSION}}|g" \
+echo "==> Bundling compose, proxy config, env example, deploy scripts, README"
+sed -E "s|\\\$\\{IMAGE_TAG:-[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?\\}|\\\${IMAGE_TAG:-${VERSION}}|g" \
     docker-compose.yml > "$OUT/docker-compose.yml"
+cp nginx.conf "$OUT/nginx.conf"
 cp .env.example "$OUT/.env.example"
-cp deploy.sh    "$OUT/deploy.sh"
-cp deploy.ps1   "$OUT/deploy.ps1"
+cp scripts/deploy.sh    "$OUT/deploy.sh"
+cp scripts/deploy.ps1   "$OUT/deploy.ps1"
 cp README.md    "$OUT/README.md"
 chmod +x "$OUT/deploy.sh"
 echo "$VERSION" > "$OUT/VERSION"
+python3 "$DEPLOY_DIR/scripts/extract_release_notes.py" \
+    --changelog "$DASHBOARD_DIR/CHANGELOG.md" \
+    --version "$VERSION" \
+    --output "$OUT/RELEASE_NOTES.md"
 
 # ---------------------------------------------------------------------------
 # Per-file checksums (so the deploy script could verify on the prod host).

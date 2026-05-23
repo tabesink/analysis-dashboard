@@ -1,7 +1,7 @@
 """Authentication service for JWT cookie-based auth.
 
-Closed-registration model: this service only verifies credentials and
-manages JWT tokens. User creation, password mutation, and admin bootstrap
+This service verifies credentials and manages JWT tokens. User creation,
+password mutation, self-service read-only registration, and admin bootstrap
 all live in `UserService` (SOLID single-responsibility split).
 """
 
@@ -44,11 +44,13 @@ class AuthService:
             raise AuthenticationError("JWT secret not configured")
 
         expires_at = datetime.now(UTC) + timedelta(hours=self.settings.jwt_expiry_hours)
+        token_version = int(user.get("token_version", 0) or 0)
         payload = {
             "sub": user["id"],
             "username": user["username"],
             "role": user["role"],
             "can_write": bool(user.get("can_write")),
+            "tv": token_version,
             "exp": int(expires_at.timestamp()),
             "iat": int(datetime.now(UTC).timestamp()),
         }
@@ -80,4 +82,18 @@ class AuthService:
         user_id = payload.get("sub", "")
         if not isinstance(user_id, str) or not user_id:
             return None
-        return self.db.get_user_by_id(user_id)
+        payload_token_version = payload.get("tv")
+        if not isinstance(payload_token_version, int):
+            raise AuthenticationError("Session superseded")
+
+        user = self.db.get_user_by_id(user_id)
+        if user is None:
+            return None
+        current_token_version = int(user.get("token_version", 0) or 0)
+        if payload_token_version != current_token_version:
+            raise AuthenticationError("Session superseded")
+        return user
+
+    def rotate_user_session(self, user_id: str) -> int:
+        """Increment user token version and return the latest value."""
+        return self.db.bump_user_token_version(user_id)

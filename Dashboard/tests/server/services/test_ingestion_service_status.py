@@ -16,6 +16,21 @@ def _artifact_abs_path(test_settings, artifact: dict) -> Path:
     return test_settings.data_root / artifact["artifact_path"]
 
 
+def _csv_with_detected_damage_channels() -> bytes:
+    return b"""#HEADER
+#TITLES
+,,001_1 LF LCA OtrBJ P_UG_X Force,002_2 LF LCA OtrBJ P_UG_Y Force,003_3 LF ShockLwBsh P_UG_X Momt
+#UNITS
+,,N,N,Nmm
+#DATATYPES
+Huge,Double,Float,Float,Float
+#DATA
+1,0.000,100.0,200.0,300.0
+2,0.001,101.0,201.0,301.0
+3,0.002,102.0,202.0,302.0
+"""
+
+
 def test_ingest_forces_pending_for_non_admin(
     test_database, test_cache, test_settings, sample_csv_content, sample_channel_map_content
 ) -> None:
@@ -158,12 +173,12 @@ def test_ingest_without_channel_map_retains_pending_artifact(
 
 
 def test_saving_channel_map_processes_pending_artifact(
-    test_database, test_cache, test_settings, sample_csv_content
+    test_database, test_cache, test_settings
 ) -> None:
     service = _make_ingestion_service(test_database, test_cache, test_settings)
     uploader = test_database.create_user("channel_map_processor")
     service.ingest(
-        files=[("event_pending_process.csv", sample_csv_content)],
+        files=[("event_pending_process.csv", _csv_with_detected_damage_channels())],
         program_id="P-PENDING-PROCESS",
         version="V1",
         channel_map_content=None,
@@ -194,6 +209,18 @@ def test_saving_channel_map_processes_pending_artifact(
     )
     assert artifacts[0]["status"] == "processed"
     assert artifacts[0]["event_id"] == events[0]["event_id"]
+
+    series = QueryService(test_database, test_cache, test_settings).get_damage_channel_series(
+        [events[0]["event_id"]]
+    )
+    assert [item["channel_key"] for item in series[:3]] == [
+        "bj_x_force",
+        "bj_y_force",
+        "bj_z_force",
+    ]
+    assert series[0]["channel_name"] == "BJ X Force"
+    assert series[-1]["channel_name"] == "Bushing R Z Momt"
+    assert series[-1]["unit"] == "Nmm"
 
 
 def test_scope_delete_removes_pending_only_artifact_file(
@@ -372,15 +399,51 @@ def test_get_all_events_marks_channel_map_missing_events_non_selectable(
     assert by_id["event-with-channel-map"]["selectable_for_plotting"] is True
 
 
+def test_get_all_events_scoped_query_excludes_pending_placeholder_rows(
+    test_database, test_cache, test_settings, sample_csv_content
+) -> None:
+    service = _make_ingestion_service(test_database, test_cache, test_settings)
+    uploader = test_database.create_user("scoped_events_uploader")
+    service.ingest(
+        files=[("event_pending_scope.csv", sample_csv_content)],
+        program_id="P-SCOPED",
+        version="V1",
+        channel_map_content=None,
+        status_value="Pending",
+        is_admin=False,
+        uploaded_by_user_id=uploader["id"],
+        metadata={"job_number": "JOB-SCOPE", "work_order": "WO-SCOPE"},
+    )
+    query_service = QueryService(test_database, test_cache, test_settings)
+
+    unscoped = query_service.get_all_events(global_filters={}, limit=100, offset=0)
+    scoped = query_service.get_all_events(
+        program_ids=["P-SCOPED"],
+        versions=["V1"],
+        global_filters={},
+        limit=100,
+        offset=0,
+    )
+
+    assert any(
+        event["event_id"] == "__pending_channel_map__::P-SCOPED::V1"
+        for event in unscoped["events"]
+    )
+    assert scoped["events"] == []
+    assert scoped["total_count"] == 0
+
+
 def test_dashboard_events_mapper_preserves_selectability_flags() -> None:
     class QueryServiceStub:
         def get_all_events(
             self,
+            program_ids: list[str] | None = None,
+            versions: list[str] | None = None,
             global_filters: dict[str, list[str] | str] | None = None,
             limit: int = 100,
             offset: int = 0,
         ) -> dict[str, object]:
-            del global_filters, limit, offset
+            del program_ids, versions, global_filters, limit, offset
             return {
                 "events": [
                     {

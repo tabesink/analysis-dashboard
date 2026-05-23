@@ -11,6 +11,7 @@ This file is the shared domain glossary for agents working on the RSP Data Analy
 - **Version**: A subdivision of a program used to compare iterations of related event data.
 - **Channel**: A named measurement signal from uploaded RSP data, normalized through the channel map when applicable.
 - **Measurement**: Time-series channel data associated with an event and used for plotting or downsampling.
+- **Fatigue Damage**: A per-event, per-channel scalar calculated from a full-resolution channel series using the notebook-defined rainflow cycle counting and SN-curve method.
 - **Global Filters**: Dashboard-wide filter selections that constrain available programs, versions, events, and plot data.
 - **Edit Metadata**: The Database/Edit workflow for updating event or program-version metadata while preserving authorization and cache invalidation rules.
 - **Database Export/Import**: Admin-only portable database transfer using the documented Parquet ZIP format, not raw database downloads.

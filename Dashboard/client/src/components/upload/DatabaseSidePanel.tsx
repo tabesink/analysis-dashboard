@@ -11,6 +11,7 @@ export interface DatabaseSidePanelProps {
   onToggleCollapse: () => void;
   uploadDataProps: UploadDataSectionProps;
   databaseProps: DatabaseSectionProps;
+  showDatabaseSection?: boolean;
 }
 
 export function DatabaseSidePanel({
@@ -18,6 +19,7 @@ export function DatabaseSidePanel({
   onToggleCollapse,
   uploadDataProps,
   databaseProps,
+  showDatabaseSection = false,
 }: DatabaseSidePanelProps) {
   return (
     <SidePanelLayout
@@ -28,10 +30,12 @@ export function DatabaseSidePanel({
       <ScrollArea className="flex-1 min-h-0 w-full">
         <div className="p-5 space-y-5 overflow-hidden">
           <UploadDataSection {...uploadDataProps} />
-          {/* Temporarily hidden per request:
+          {showDatabaseSection ? (
+            <>
               <Separator />
               <DatabaseSection {...databaseProps} />
-          */}
+            </>
+          ) : null}
         </div>
       </ScrollArea>
     </SidePanelLayout>

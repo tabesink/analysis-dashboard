@@ -16,11 +16,7 @@ export function FilterSummaryBar({
   onClearAll,
 }: FilterSummaryBarProps) {
   if (activeFilters.length === 0) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        No filters selected - all events are shown.
-      </p>
-    );
+    return null;
   }
 
   return (

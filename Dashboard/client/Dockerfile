@@ -20,15 +20,22 @@ WORKDIR /app/client
 
 COPY --from=deps /app/client/node_modules ./node_modules
 
-# Source-of-truth files needed by client/scripts/generate-*.js.
+# Source-of-truth files needed by client/scripts/generate-*.js and /changelog.
 # Place them where the generator scripts expect (Dashboard/ root layout).
 COPY VERSION /app/VERSION
+COPY CHANGELOG.md /app/CHANGELOG.md
 COPY server/schema.yaml /app/server/schema.yaml
 
 COPY client/. .
 
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+# Leave NEXT_PUBLIC_API_URL empty by default so a single image can resolve the
+# API from the browser's LAN hostname instead of baking localhost into the build.
+ARG NEXT_PUBLIC_API_URL=
+ARG NEXT_PUBLIC_API_PORT=8000
+ARG NEXT_PUBLIC_API_MODE=lan-port
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_PORT=$NEXT_PUBLIC_API_PORT
+ENV NEXT_PUBLIC_API_MODE=$NEXT_PUBLIC_API_MODE
 
 RUN npm run build
 
@@ -45,6 +52,8 @@ RUN addgroup --system --gid 1001 nodejs && \
 COPY --from=builder /app/client/public ./public
 COPY --from=builder /app/client/.next/standalone ./
 COPY --from=builder /app/client/.next/static ./.next/static
+# Runtime read by src/app/changelog/page.tsx (process.cwd() is /app in standalone).
+COPY --from=builder /app/CHANGELOG.md ./CHANGELOG.md
 
 RUN chown -R nextjs:nodejs /app
 

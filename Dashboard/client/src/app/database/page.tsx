@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/popover';
 import { useUpload, useUploadedDatasets, useDatabaseOperation } from '@/hooks';
 import { dashboardApi, uploadApi } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import {
   DatabaseSidePanel,
   DatabaseOperationModal,
@@ -89,6 +90,46 @@ const widthForValues = (label: string, values: string[]): number => {
 
 type SortField = string;
 type SortDirection = 'asc' | 'desc';
+
+const DATABASE_TABLE_PREFS_STORAGE_KEY = 'database_table_prefs_v1';
+
+type DatabaseTablePreferences = {
+  visibleColumns: Record<string, boolean>;
+  columnWidths: Record<string, number>;
+  updatedAt: string;
+};
+
+const parseDatabaseTablePreferences = (
+  raw: string | null,
+): DatabaseTablePreferences | null => {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    const visibleColumns =
+      typeof parsed.visibleColumns === 'object' && parsed.visibleColumns !== null
+        ? (parsed.visibleColumns as Record<string, boolean>)
+        : {};
+    const columnWidths =
+      typeof parsed.columnWidths === 'object' && parsed.columnWidths !== null
+        ? (parsed.columnWidths as Record<string, number>)
+        : {};
+    return {
+      visibleColumns,
+      columnWidths,
+      updatedAt:
+        typeof parsed.updatedAt === 'string'
+          ? parsed.updatedAt
+          : new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+};
 
 export default function DatabasePage() {
   const router = useRouter();
@@ -208,6 +249,10 @@ export default function DatabasePage() {
     vehicle_type: true,
     status: true,
   });
+  const [storedTablePreferences, setStoredTablePreferences] =
+    useState<DatabaseTablePreferences | null>(null);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [preferencesHydrated, setPreferencesHydrated] = useState(false);
 
   const staticColumnDefinitions = [
     { key: 'work_order', label: 'Work Order' },
@@ -266,28 +311,105 @@ export default function DatabasePage() {
   );
 
   useEffect(() => {
-    if (dynamicMetadataColumns.length === 0) {
+    if (typeof window === 'undefined') {
       return;
     }
+    const stored = parseDatabaseTablePreferences(
+      window.localStorage.getItem(DATABASE_TABLE_PREFS_STORAGE_KEY),
+    );
+    setStoredTablePreferences(stored);
+    setPreferencesLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (dynamicMetadataColumns.length === 0 && !preferencesLoaded) {
+      return;
+    }
+    const availableColumnKeys = new Set(columnDefinitions.map((column) => column.key));
+    let didHydrateInThisRun = false;
     setColumnFilters((prev) => {
       const next = { ...prev };
+      let changed = false;
       dynamicMetadataColumns.forEach((column) => {
         if (!next[column.key]) {
           next[column.key] = [];
+          changed = true;
         }
       });
-      return next;
+      return changed ? next : prev;
     });
     setVisibleColumns((prev) => {
-      const next = { ...prev };
-      dynamicMetadataColumns.forEach((column) => {
-        if (!(column.key in next)) {
-          next[column.key] = !defaultHiddenMetadataColumns.has(column.key);
+      const next: Record<string, boolean> = {};
+      columnDefinitions.forEach((column) => {
+        if (preferencesHydrated && column.key in prev) {
+          next[column.key] = prev[column.key];
+          return;
         }
+        if (storedTablePreferences?.visibleColumns[column.key] !== undefined) {
+          next[column.key] = storedTablePreferences.visibleColumns[column.key];
+          return;
+        }
+        next[column.key] =
+          column.key === 'status' || !defaultHiddenMetadataColumns.has(column.key);
       });
+      if (!preferencesHydrated && preferencesLoaded) {
+        didHydrateInThisRun = true;
+      }
+      const nextEntries = Object.entries(next);
+      if (
+        nextEntries.length === Object.keys(prev).length &&
+        nextEntries.every(([key, value]) => prev[key] === value)
+      ) {
+        return prev;
+      }
       return next;
     });
-  }, [defaultHiddenMetadataColumns, dynamicMetadataColumns]);
+    if (didHydrateInThisRun) {
+      setPreferencesHydrated(true);
+    }
+    setStoredTablePreferences((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const prunedVisibleColumns = Object.fromEntries(
+        Object.entries(prev.visibleColumns).filter(([key]) =>
+          availableColumnKeys.has(key),
+        ),
+      );
+      const prunedColumnWidths = Object.fromEntries(
+        Object.entries(prev.columnWidths).filter(
+          ([key]) => key === PROGRAM_ID_KEY || availableColumnKeys.has(key),
+        ),
+      );
+      const visibleUnchanged =
+        Object.keys(prunedVisibleColumns).length ===
+          Object.keys(prev.visibleColumns).length &&
+        Object.entries(prunedVisibleColumns).every(
+          ([key, value]) => prev.visibleColumns[key] === value,
+        );
+      const widthsUnchanged =
+        Object.keys(prunedColumnWidths).length ===
+          Object.keys(prev.columnWidths).length &&
+        Object.entries(prunedColumnWidths).every(
+          ([key, value]) => prev.columnWidths[key] === value,
+        );
+      if (visibleUnchanged && widthsUnchanged) {
+        return prev;
+      }
+      return {
+        ...prev,
+        visibleColumns: prunedVisibleColumns,
+        columnWidths: prunedColumnWidths,
+      };
+    });
+  }, [
+    columnDefinitions,
+    defaultHiddenMetadataColumns,
+    dynamicMetadataColumns,
+    preferencesHydrated,
+    preferencesLoaded,
+    storedTablePreferences,
+  ]);
 
   const getColumnValue = useCallback((dataset: DatasetInfo, columnKey: string): string => {
     const value = (dataset as unknown as Record<string, unknown>)[columnKey];
@@ -744,35 +866,95 @@ export default function DatabasePage() {
     [columnDefinitions, visibleColumns],
   );
 
-  // Pixel widths per column (session-only). Seeded once per column id from
-  // the longest known value in filterOptions; user resizes are preserved.
+  // Pixel widths per column. Seeded from the longest known value in
+  // filterOptions and persisted in browser-local preferences.
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const defaultColumnWidths = useMemo(() => {
+    const next: Record<string, number> = {
+      [PROGRAM_ID_KEY]: PROGRAM_ID_DEFAULT_PX,
+    };
+    for (const col of columnDefinitions) {
+      const entry = Object.values(filterOptions).find((o) => o.column === col.key);
+      next[col.key] = widthForValues(col.label, entry?.values ?? []);
+    }
+    return next;
+  }, [columnDefinitions, filterOptions]);
 
   useEffect(() => {
+    if (!preferencesLoaded) {
+      return;
+    }
     setColumnWidths((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      if (next[PROGRAM_ID_KEY] === undefined) {
-        next[PROGRAM_ID_KEY] = PROGRAM_ID_DEFAULT_PX;
-        changed = true;
-      }
+      const next: Record<string, number> = {};
+      next[PROGRAM_ID_KEY] =
+        prev[PROGRAM_ID_KEY] ??
+        storedTablePreferences?.columnWidths[PROGRAM_ID_KEY] ??
+        defaultColumnWidths[PROGRAM_ID_KEY];
       for (const col of columnDefinitions) {
-        if (next[col.key] !== undefined) continue;
-        const entry = Object.values(filterOptions).find(
-          (o) => o.column === col.key,
-        );
-        next[col.key] = widthForValues(col.label, entry?.values ?? []);
-        changed = true;
+        const existing = preferencesHydrated ? prev[col.key] : undefined;
+        const stored = storedTablePreferences?.columnWidths[col.key];
+        const fallback = defaultColumnWidths[col.key];
+        next[col.key] = existing ?? stored ?? fallback;
       }
-      return changed ? next : prev;
+      const nextEntries = Object.entries(next);
+      if (
+        nextEntries.length === Object.keys(prev).length &&
+        nextEntries.every(([key, value]) => prev[key] === value)
+      ) {
+        return prev;
+      }
+      return next;
     });
-  }, [columnDefinitions, filterOptions]);
+  }, [
+    columnDefinitions,
+    defaultColumnWidths,
+    preferencesHydrated,
+    preferencesLoaded,
+    storedTablePreferences,
+  ]);
 
   const setColumnWidth = useCallback((key: string, next: number) => {
     setColumnWidths((prev) =>
       prev[key] === next ? prev : { ...prev, [key]: next },
     );
   }, []);
+
+  const resetTablePreferences = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(DATABASE_TABLE_PREFS_STORAGE_KEY);
+    }
+    setStoredTablePreferences(null);
+    setVisibleColumns(() => {
+      const next: Record<string, boolean> = {};
+      columnDefinitions.forEach((column) => {
+        next[column.key] =
+          column.key === 'status' || !defaultHiddenMetadataColumns.has(column.key);
+      });
+      return next;
+    });
+    setColumnWidths(defaultColumnWidths);
+    setPreferencesHydrated(true);
+  }, [columnDefinitions, defaultColumnWidths, defaultHiddenMetadataColumns]);
+
+  useEffect(() => {
+    if (!preferencesHydrated || typeof window === 'undefined') {
+      return;
+    }
+    const payload: DatabaseTablePreferences = {
+      visibleColumns,
+      columnWidths,
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      window.localStorage.setItem(
+        DATABASE_TABLE_PREFS_STORAGE_KEY,
+        JSON.stringify(payload),
+      );
+      setStoredTablePreferences(payload);
+    } catch {
+      // Keep table usable if storage is blocked or full.
+    }
+  }, [columnWidths, preferencesHydrated, visibleColumns]);
 
   const dataColumnsTotalWidth = useMemo(
     () =>
@@ -786,11 +968,11 @@ export default function DatabasePage() {
   const totalRowWidth = programIdWidth + dataColumnsTotalWidth;
 
   if (authStatus === 'loading' || authStatus === 'idle') {
-    return <main className="flex-1 p-4">Loading...</main>;
+    return <div className="flex-1 p-4">Loading...</div>;
   }
 
   return (
-    <main className="flex-1 p-4 min-h-[calc(100vh-3.5rem)]">
+    <div className="flex-1 p-4 min-h-[calc(100vh-3.5rem)]">
       <div className="flex gap-0 h-[calc(100vh-7rem)]">
 
         {/* Side Panel */}
@@ -822,6 +1004,7 @@ export default function DatabasePage() {
             onExportDatabase: handleExportDatabase,
             onImportClick: handleImportClick,
           }}
+          showDatabaseSection={isAdmin}
         />
 
         <DatabaseOperationModal {...dbOperation.modalProps} />
@@ -830,83 +1013,102 @@ export default function DatabasePage() {
         <div className="flex-1 min-w-0 min-h-0">
           <Card className="h-full rounded-r-lg rounded-l-none flex flex-col gap-0 overflow-hidden shadow-subtle border py-0">
             {/* Table Header */}
-            <div className="shrink-0 flex items-center justify-end gap-2 px-4 py-3 border-b">
-              {isDatasetsRefreshing && (
-                <div className="mr-auto flex items-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Refreshing datasets...
-                </div>
-              )}
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 rounded-lg px-3 gap-2"
-                  >
-                    <Columns className="h-4 w-4" />
-                    <span className="text-xs">Columns</span>
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-56 p-3" align="end">
-                  <div className="space-y-3">
-                    <div className="text-xs font-semibold">Column Visibility</div>
-                    <div className="space-y-2 bg-muted/70 rounded-md p-2">
-                      {toggleableColumnDefinitions.map((col) => {
-                        const isChecked = visibleColumns[col.key];
-                        const isDisabled = false; // Allow all columns to be visible
-                        
-                        return (
-                          <div
-                            key={col.key}
-                            className="flex items-center space-x-2"
-                          >
-                            <Checkbox
-                              id={col.key}
-                              checked={isChecked}
-                              onCheckedChange={(checked) =>
-                                handleColumnVisibilityToggle(col.key, checked as boolean)
-                              }
-                              disabled={isDisabled}
-                              className="data-[state=checked]:bg-primary data-[state=checked]:border-primary"
-                            />
-                            <label
-                              htmlFor={col.key}
-                              className={`text-xs cursor-pointer flex-1 ${
-                                isDisabled ? 'text-muted-foreground opacity-50' : ''
-                              }`}
-                            >
-                              {col.label}
-                            </label>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="text-xs text-muted-foreground pt-2 border-t">
-                      {Object.values(visibleColumns).filter(Boolean).length} columns visible
-                    </div>
+            <div className="shrink-0 flex items-center justify-between border-b px-4 py-3">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium">Datasets</p>
+                {isDatasetsRefreshing && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Refreshing datasets...
                   </div>
-                </PopoverContent>
-              </Popover>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleDeleteSelected}
-                disabled={selectedDatasets.length === 0 || isDeletingIds.length > 0}
-                className={`h-8 rounded-lg px-3 gap-2 ${selectedDatasets.length > 0 ? 'text-destructive border-destructive/30 hover:bg-destructive/10' : ''}`}
-              >
-                {isDeletingIds.length > 0 ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span className="text-xs">Deleting...</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="h-4 w-4" />
-                    <span className="text-xs">Delete</span>
-                  </>
                 )}
-              </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      aria-label="Column visibility"
+                      className="min-w-[5.75rem] justify-center"
+                    >
+                      <Columns className="size-4" />
+                      Cols
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-56 p-3" align="end">
+                    <div className="space-y-3">
+                      <div className="text-xs font-semibold">Column Visibility</div>
+                      <div className="space-y-2 bg-muted/70 rounded-md p-2">
+                        {toggleableColumnDefinitions.map((col) => {
+                          const isChecked = visibleColumns[col.key];
+                          const isDisabled = false; // Allow all columns to be visible
+
+                          return (
+                            <div
+                              key={col.key}
+                              className="flex items-center space-x-2"
+                            >
+                              <Checkbox
+                                id={col.key}
+                                checked={isChecked}
+                                onCheckedChange={(checked) =>
+                                  handleColumnVisibilityToggle(col.key, checked as boolean)
+                                }
+                                disabled={isDisabled}
+                                className="data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+                              />
+                              <label
+                                htmlFor={col.key}
+                                className={`text-xs cursor-pointer flex-1 ${
+                                  isDisabled ? 'text-muted-foreground opacity-50' : ''
+                                }`}
+                              >
+                                {col.label}
+                              </label>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="text-xs text-muted-foreground pt-2 border-t">
+                        {Object.values(visibleColumns).filter(Boolean).length} columns visible
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={resetTablePreferences}
+                        className="h-7 w-full justify-start px-2 text-xs"
+                      >
+                        Reset table preferences
+                      </Button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleDeleteSelected}
+                  disabled={selectedDatasets.length === 0 || isDeletingIds.length > 0}
+                  className={cn(
+                    'min-w-[5.75rem] justify-center',
+                    selectedDatasets.length > 0 &&
+                      'text-destructive border-destructive/30 hover:bg-destructive/10',
+                  )}
+                >
+                  {isDeletingIds.length > 0 ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Deleting...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="size-4" />
+                      Delete
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
 
             {/* Tree Content (single horizontal-scroll container shared by
@@ -972,6 +1174,6 @@ export default function DatabasePage() {
           </Card>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

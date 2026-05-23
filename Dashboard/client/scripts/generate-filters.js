@@ -22,6 +22,21 @@ const SCHEMA_YAML_PATH = SCHEMA_YAML_CANDIDATES.find((candidate) => fs.existsSyn
 const FILTERS_TS_PATH = path.join(__dirname, '..', 'src', 'config', 'filters.ts');
 const q = (value) => JSON.stringify(value);
 
+function normalizeColumns(columns) {
+  if (Array.isArray(columns)) {
+    return columns;
+  }
+
+  if (columns && typeof columns === 'object') {
+    return Object.entries(columns).map(([name, definition]) => ({
+      name,
+      ...definition,
+    }));
+  }
+
+  throw new Error('dim_event.columns must be an array or object map');
+}
+
 try {
   if (!SCHEMA_YAML_PATH) {
     throw new Error(
@@ -43,7 +58,7 @@ try {
   const filterOptions = {};
   const filterColumns = [];
 
-  for (const column of dimEvent.columns) {
+  for (const column of normalizeColumns(dimEvent.columns)) {
     if (column.filter) {
       const displayName = column.filter.display_name;
       filterOptions[displayName] = {

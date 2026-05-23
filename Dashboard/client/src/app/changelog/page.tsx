@@ -3,9 +3,12 @@ import { resolve } from "node:path";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+/** Candidate paths for Dashboard/CHANGELOG.md (dev vs Docker standalone). */
 const CHANGELOG_PATHS = [
-  resolve(process.cwd(), "..", "CHANGELOG.md"),
+  // Production Docker: WORKDIR /app, file copied next to server.js
   resolve(process.cwd(), "CHANGELOG.md"),
+  // Local dev / npm run dev: cwd is Dashboard/client
+  resolve(process.cwd(), "..", "CHANGELOG.md"),
 ];
 
 async function getChangelogMarkdown(): Promise<{ markdown: string | null; sourcePath?: string }> {
@@ -57,7 +60,8 @@ export default async function ChangelogPage() {
         </article>
       ) : (
         <div className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
-          Unable to load changelog content from `Dashboard/CHANGELOG.md`.
+          Unable to load changelog content. Expected `Dashboard/CHANGELOG.md` in
+          development or `/app/CHANGELOG.md` in the production container.
           {sourcePath ? ` Last attempted path: ${sourcePath}.` : ""}
         </div>
       )}

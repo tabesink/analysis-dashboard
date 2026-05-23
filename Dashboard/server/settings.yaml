@@ -1,30 +1,29 @@
 # RSP Data Analytics Dashboard API - Configuration
 # Copy to settings.yaml and modify as needed
 
-# Runtime mode for non-container runs:
-# - development: localhost-only defaults
-# - production: network-exposed defaults + stricter security validation
-app_env: "production"
+# Runtime mode for non-container runs.
+# Environment variables are the source of truth for deployments; this file is a
+# readable local-development template.
+app_env: "development"
 
 # Server settings
-host: "0.0.0.0"
+host: "127.0.0.1"
 port: 8000
-debug: false
+debug: true
 log_level: "INFO"
 
-# Security (override via environment variables for secrets)
-admin_secret: "admin123"  # Change this in production! Set via ADMIN_SECRET env var
-jwt_secret: "ea641413d4cb18d1851980fbeac7a4390f1dbbfb18af894224c923b7113169ad"  # Set via JWT_SECRET env var in production
+# Security (override via environment variables for real deployments)
+admin_secret: "dev-admin-password-change-me"
+jwt_secret: "dev-jwt-secret-change-me"
 jwt_algorithm: "HS256"
 jwt_expiry_hours: 24
 auth_cookie_name: "rsp_auth"
-auth_cookie_secure: false  # LAN intranet over HTTP; flip to true behind a TLS terminator
+auth_cookie_secure: false
 auth_cookie_samesite: "lax"
-allow_insecure_cookies: true  # required because app_env=production above
+allow_insecure_cookies: false
 cors_origins:
   - "http://localhost:3001"
   - "http://127.0.0.1:3001"
-  - "http://mtc-aiml-02:3001"
 
 # Storage paths
 data_root: "data"
@@ -38,7 +37,7 @@ lttb_point_budget: 100
 lttb_reduction_factor: 0.4
 
 # Query limits
-max_upload_size_mb: 15000
+max_upload_size_mb: 61440
 max_events_per_query: 500
 
 # Performance monitoring

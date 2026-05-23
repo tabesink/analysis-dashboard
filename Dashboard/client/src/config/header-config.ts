@@ -10,6 +10,7 @@ export const getHeaderConfig = (pathname: string): HeaderConfig => {
     '/database': undefined,
     '/dashboard': undefined,
     '/database/edit': undefined,
+    '/inspect-damage': undefined,
   };
 
   return {

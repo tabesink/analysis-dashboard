@@ -1,5 +1,7 @@
 # Database notes
 
+> **Canonical copy:** [`docs/notes/database.md`](../notes/database.md). This brainstorm note may lag behind shipped behavior.
+
 ## Runtime
 
 - Single DuckDB file: `dashboard.db` (path from server settings / `data/`).

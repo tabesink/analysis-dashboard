@@ -26,19 +26,19 @@ default_plot_keys:
     x_label: "X-Component (N)"
     y_label: "Z-Component (N)"
   "bushing_f_xy_force_plot":
-    title: "Bushing F XY Force"
+    title: "Bushing F XY Moment"
     x_label: "X-Component (N)"
     y_label: "Y-Component (N)"
   "bushing_f_xz_force_plot":
-    title: "Bushing F XZ Force"
+    title: "Bushing F XZ Moment"
     x_label: "X-Component (N)"
     y_label: "Z-Component (N)"
   "bushing_r_xy_force_plot":
-    title: "Bushing R XY Force"
+    title: "Bushing R XY Moment"
     x_label: "X-Component (N)"
     y_label: "Y-Component (N)"
   "bushing_r_xz_force_plot":
-    title: "Bushing R XZ Force"
+    title: "Bushing R XZ Moment"
     x_label: "X-Component (N)"
     y_label: "Z-Component (N)"
 

@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir ./server
 
 # Copy application code
+COPY VERSION ./VERSION
 COPY server ./server
 
 # Use Docker-specific settings

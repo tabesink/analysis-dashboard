@@ -14,6 +14,26 @@ export interface UIPreferences {
 }
 
 /**
+ * Inspect Damage table UI preferences persisted in session
+ */
+export interface InspectDamageTablePreferencesState {
+  visible_columns: Record<string, boolean>;
+  column_widths: Record<string, number>;
+  expanded_programs: string[];
+  expanded_versions: string[];
+  sort_field: string;
+  sort_direction: 'asc' | 'desc';
+  column_filters: Record<string, string[]>;
+}
+
+/**
+ * Inspect Damage route UI state. Event selection is stored in data_state.
+ */
+export interface InspectDamageState {
+  table_preferences?: InspectDamageTablePreferencesState;
+}
+
+/**
  * Full session state persisted on server
  */
 export interface SessionState {
@@ -21,6 +41,7 @@ export interface SessionState {
   global_filters: GlobalFilters;
   rendered_event_ids: string[];
   ui_preferences?: UIPreferences;
+  inspect_damage_state?: InspectDamageState;
 }
 
 /**
@@ -31,6 +52,7 @@ export interface SessionCreatePayload {
   global_filters?: GlobalFilters;
   rendered_event_ids?: string[];
   ui_preferences?: UIPreferences;
+  inspect_damage_state?: InspectDamageState;
 }
 
 /**
@@ -41,6 +63,7 @@ export interface SessionUpdatePayload {
   global_filters?: GlobalFilters;
   rendered_event_ids?: string[];
   ui_preferences?: UIPreferences;
+  inspect_damage_state?: InspectDamageState;
 }
 
 /**

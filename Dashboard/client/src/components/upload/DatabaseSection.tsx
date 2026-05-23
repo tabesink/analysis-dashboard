@@ -26,10 +26,11 @@ export function DatabaseSection({
   onImportClick,
 }: DatabaseSectionProps) {
   const subtitle =
-    currentEventCount > 0 ? `${currentEventCount} events` : 'Export or import';
+    currentEventCount > 0 ? `${currentEventCount} events` : 'Export or import load data';
 
   return (
-    <SidePanelSection title="Database" subtitle={subtitle}>
+
+<SidePanelSection title="Transfer Data" subtitle={subtitle}>
       <div className="space-y-2">
         <Button
           variant="ghost"
@@ -47,7 +48,7 @@ export function DatabaseSection({
           <div className="flex-1 text-left min-w-0">
             <span className="text-sm font-medium block">Export Database</span>
             <span className="text-xs text-muted-foreground block truncate">
-              {exportProgress || 'Compressed Parquet archive (.zip)'}
+              {exportProgress || 'Events, measurements, and artifacts (.zip)'}
             </span>
           </div>
           <ChevronRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
@@ -72,7 +73,7 @@ export function DatabaseSection({
             <span className="text-sm font-medium block">Import Database</span>
             <span className="text-xs text-amber-600 dark:text-amber-500 flex items-center gap-1">
               <AlertTriangle className="h-3 w-3" />
-              Replaces all data
+              Replaces the current database
             </span>
           </div>
           <ChevronRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />

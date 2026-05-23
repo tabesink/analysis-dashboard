@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo } from 'react';
 import { LineChart, Loader2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useUIStore } from '@/stores/ui-store';
 import { useRenderStore } from '@/stores/render-store';
@@ -24,7 +23,6 @@ import { sortCurvesForRendering } from '@/lib/chart-utils/sort';
 import { PinnedEventsOverlay } from './PinnedEventsOverlay';
 
 export function InteractiveViewer() {
-  const setActiveTab = useUIStore((state) => state.setActiveTab);
   const curveVisibility = useUIStore((state) => state.curveVisibility);
   const resetCurveVisibility = useUIStore((state) => state.resetCurveVisibility);
   const selectedPlotKey = useRenderStore((state) => state.selectedPlotKey);
@@ -119,17 +117,10 @@ export function InteractiveViewer() {
           <div>
             <h3 className="text-base font-medium text-foreground">No plot selected</h3>
             <p className="text-sm text-muted-foreground mt-1">
-              Select a plot from the grid view to interact with it
+              Select a plot from the grid view to interact with it, or use Return to grid in the
+              header.
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setActiveTab('grid')}
-            className="rounded-lg"
-          >
-            Return to Grid
-          </Button>
         </div>
       </div>
     );
@@ -190,8 +181,8 @@ function ErrorState({ displayName, error }: { displayName: string; error: Error 
 
 function PlotLabel({ displayName }: { displayName: string }) {
   return (
-    <div className="absolute bottom-0 left-0 right-0 bg-background/90 backdrop-blur-sm px-4 py-2">
-      <p className="text-sm font-medium truncate">{displayName}</p>
+    <div className="absolute bottom-1.5 left-2 max-w-[calc(100%-1rem)] flex items-center gap-1.5 bg-gray-100/80 px-1.5 py-0.5 rounded">
+      <p className="text-xs font-medium text-black leading-none truncate">{displayName}</p>
     </div>
   );
 }

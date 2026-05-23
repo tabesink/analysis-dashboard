@@ -41,6 +41,11 @@ todos:
 isProject: false
 ---
 
+> Superseded: this is historical planning context only. Current release and
+> deployment guidance lives in `AGENT.md` and `Deployment/README.md`; the active
+> stack is the root `Deployment/` LAN release bundle, not the older Caddy/prod
+> compose/bootstrap design described here.
+
 ## Final decisions (locked)
 
 - **Mounts**: writables only — source baked into image; only `./data/prod-data` (DB) and `./data/prod-logs` (logs) bind-mounted into the server. Hardening (read_only FS, UID 1001, dropped caps) stays intact.

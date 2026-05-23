@@ -38,6 +38,10 @@ todos:
 isProject: false
 ---
 
+> Superseded: this is historical planning context only. Current release and
+> deployment guidance lives in `AGENT.md` and `Deployment/README.md`; the active
+> stack is the root `Deployment/` release bundle with a single proxy entrypoint.
+
 # Simple LAN Deployment
 
 ## Goal

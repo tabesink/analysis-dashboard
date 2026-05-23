@@ -5,12 +5,14 @@ in sync with schema.yaml definitions.
 """
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import duckdb
 
+from .schema_applier import SchemaApplier
 from .schema_loader import SchemaLoader, get_schema_loader
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,10 @@ class MigrationRunner:
     """
 
     VERSION_TABLE = "schema_version"
+    _STATUS_OK = "OK"
+    _STATUS_MISSING = "MISSING"
+    _STATUS_TYPE_MISMATCH = "TYPE_MISMATCH"
+    _STATUS_DRIFT = "DRIFT"
 
     def __init__(self, db_path: Path, schema_loader: SchemaLoader | None = None):
         """
@@ -120,17 +126,11 @@ class MigrationRunner:
         try:
             conn.begin()
             
-            # Generate and execute all SQL statements
-            statements = self.schema_loader.generate_all_sql()
-            executed = []
-            
-            for stmt in statements:
-                try:
-                    conn.execute(stmt)
-                    executed.append(stmt[:50] + "..." if len(stmt) > 50 else stmt)
-                except Exception as e:
-                    logger.warning(f"Statement failed (may already exist): {e}")
-                    executed.append(f"SKIPPED: {stmt[:30]}...")
+            statements = SchemaApplier(self.schema_loader).apply(conn)
+            executed = [
+                stmt[:50] + "..." if len(stmt) > 50 else stmt
+                for stmt in statements
+            ]
             
             # Update version
             target_version = self.get_target_version()
@@ -150,6 +150,33 @@ class MigrationRunner:
         except Exception as e:
             conn.rollback()
             logger.error(f"Migration failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+            }
+        finally:
+            conn.close()
+
+    def reconcile_declared_schema(self) -> dict[str, Any]:
+        """
+        Apply declared schema DDL without mutating schema_version metadata.
+
+        This healing step is intended for legacy deployments where the stored
+        version is already current but additive columns from schema.yaml are
+        missing in the live database.
+        """
+        conn = self._get_connection()
+        try:
+            conn.begin()
+            statements = SchemaApplier(self.schema_loader).apply(conn)
+            conn.commit()
+            return {
+                "success": True,
+                "statements_executed": len(statements),
+            }
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Schema reconciliation failed: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -183,6 +210,38 @@ class MigrationRunner:
         # For now, we just apply the full schema (safe with IF NOT EXISTS)
         return self.apply_initial_schema()
 
+    def initialize_store_for_startup(self) -> tuple["UnifiedStore", dict[str, Any]]:
+        """
+        Initialize runtime storage through the canonical startup mutation path.
+
+        Order is preserved intentionally:
+        1) apply migration/schema mutations
+        2) open UnifiedStore connection owner
+        3) apply runtime startup backfills
+        """
+        migration_result = self.migrate_up()
+        if not migration_result.get("success"):
+            error_message = migration_result.get("error") or migration_result.get("message")
+            raise RuntimeError(
+                f"Database migrations failed: {error_message or 'unknown error'}"
+            )
+        reconcile_result = self.reconcile_declared_schema()
+        if not reconcile_result.get("success"):
+            error_message = reconcile_result.get("error") or "unknown error"
+            raise RuntimeError(f"Database schema reconciliation failed: {error_message}")
+        migration_result["schema_reconcile_statements"] = reconcile_result.get(
+            "statements_executed", 0
+        )
+        from .database import UnifiedStore
+
+        store = UnifiedStore(
+            self.db_path,
+            schema_loader=self.schema_loader,
+            initialize_schema=False,
+        )
+        store.apply_startup_backfills()
+        return store, migration_result
+
     def migrate_down(self) -> dict[str, Any]:
         """
         Rollback to previous version.
@@ -215,19 +274,142 @@ class MigrationRunner:
             
             # Get tables from schema.yaml
             schema_table_names = set(self.schema_loader.tables.keys())
-            
-            # Find differences
-            missing_tables = schema_table_names - existing_table_names
-            extra_tables = existing_table_names - schema_table_names - {self.VERSION_TABLE}
-            
+
+            table_rows = conn.execute(
+                """
+                SELECT table_name, column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'main'
+                """
+            ).fetchall()
+            live_columns: dict[str, dict[str, str]] = {}
+            for table_name, column_name, data_type in table_rows:
+                live_columns.setdefault(table_name, {})[column_name] = data_type
+
+            report_entries: list[dict[str, Any]] = []
+            summary = {
+                self._STATUS_OK: 0,
+                self._STATUS_MISSING: 0,
+                self._STATUS_TYPE_MISMATCH: 0,
+                self._STATUS_DRIFT: 0,
+            }
+
+            for table_name in sorted(schema_table_names):
+                if table_name not in existing_table_names:
+                    status = self._STATUS_MISSING
+                    report_entries.append(
+                        {
+                            "object_type": "table",
+                            "table": table_name,
+                            "status": status,
+                            "details": {"reason": "Declared table missing from live database"},
+                        }
+                    )
+                    summary[status] += 1
+                    continue
+
+                declared_columns = self.schema_loader.tables[table_name].get("columns", {})
+                declared_column_names = set(declared_columns.keys())
+                live_table_columns = live_columns.get(table_name, {})
+                live_column_names = set(live_table_columns.keys())
+
+                missing_columns = sorted(declared_column_names - live_column_names)
+                extra_columns = sorted(live_column_names - declared_column_names)
+
+                type_mismatches: list[dict[str, str]] = []
+                for column_name in sorted(declared_column_names & live_column_names):
+                    declared_type = declared_columns[column_name].get("type", "")
+                    live_type = live_table_columns[column_name]
+                    if self._normalize_type(declared_type) != self._normalize_type(live_type):
+                        type_mismatches.append(
+                            {
+                                "column": column_name,
+                                "declared_type": declared_type,
+                                "live_type": live_type,
+                            }
+                        )
+
+                if type_mismatches:
+                    status = self._STATUS_TYPE_MISMATCH
+                elif missing_columns:
+                    status = self._STATUS_MISSING
+                elif extra_columns:
+                    status = self._STATUS_DRIFT
+                else:
+                    status = self._STATUS_OK
+
+                report_entries.append(
+                    {
+                        "object_type": "table",
+                        "table": table_name,
+                        "status": status,
+                        "details": {
+                            "missing_columns": missing_columns,
+                            "extra_columns": extra_columns,
+                            "type_mismatches": type_mismatches,
+                        },
+                    }
+                )
+                summary[status] += 1
+
+            for table_name in sorted(
+                existing_table_names - schema_table_names - {self.VERSION_TABLE}
+            ):
+                status = self._STATUS_DRIFT
+                report_entries.append(
+                    {
+                        "object_type": "table",
+                        "table": table_name,
+                        "status": status,
+                        "details": {
+                            "reason": "Live table not declared in schema registry"
+                        },
+                    }
+                )
+                summary[status] += 1
+
+            missing_tables = [
+                entry["table"]
+                for entry in report_entries
+                if entry["status"] == self._STATUS_MISSING
+                and entry["table"] in schema_table_names
+                and entry["details"].get("reason")
+            ]
+            extra_tables = [
+                entry["table"]
+                for entry in report_entries
+                if entry["status"] == self._STATUS_DRIFT
+                and entry["table"] not in schema_table_names
+            ]
+
             return {
                 "schema_version": self.get_target_version(),
                 "db_version": self.get_current_version(),
                 "tables_in_schema": list(schema_table_names),
                 "tables_in_db": list(existing_table_names),
-                "missing_tables": list(missing_tables),
-                "extra_tables": list(extra_tables),
+                "missing_tables": missing_tables,
+                "extra_tables": extra_tables,
+                "doctor_report": report_entries,
+                "doctor_summary": summary,
             }
             
         finally:
             conn.close()
+
+    @staticmethod
+    def _normalize_type(type_name: str) -> str:
+        """
+        Normalize type names from declared schema and information_schema.
+
+        DuckDB can surface aliases or strip width/precision when introspecting,
+        so the schema doctor compares normalized base types.
+        """
+        normalized = re.sub(r"\(.*\)", "", type_name.strip().upper())
+        aliases = {
+            "INT": "INTEGER",
+            "INT4": "INTEGER",
+            "INT8": "BIGINT",
+            "BOOL": "BOOLEAN",
+            "DOUBLE PRECISION": "DOUBLE",
+        }
+        return aliases.get(normalized, normalized)

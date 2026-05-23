@@ -11,6 +11,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import {
   AlertDialog,
@@ -20,6 +21,8 @@ import {
   AlertDialogFooter,
 } from '@/components/ui/alert-dialog';
 import type { DatabaseValidationResponse, TaskStatusResponse } from '@/lib/api/export';
+
+const IMPORT_CONFIRMATION_TEXT = 'IMPORT';
 
 export type DatabaseOperationMode = 'export' | 'import';
 
@@ -60,6 +63,8 @@ export interface DatabaseOperationModalProps {
   onConfirmImport?: () => void;
   /** Live task polling */
   taskStatus?: TaskStatusResponse | null;
+  taskConnectionLost?: boolean;
+  taskConnectionMessage?: string;
   activeTaskId?: string | null;
   /** True while the cancel request is in flight (shows spinner on button) */
   isCancelling?: boolean;
@@ -160,6 +165,8 @@ export function DatabaseOperationModal({
   currentEventCount = 0,
   onConfirmImport,
   taskStatus,
+  taskConnectionLost = false,
+  taskConnectionMessage,
   activeTaskId,
   isCancelling = false,
   onCancelOperation,
@@ -172,7 +179,9 @@ export function DatabaseOperationModal({
   };
 
   const [elapsedSec, setElapsedSec] = useState(0);
+  const [nowSec, setNowSec] = useState(0);
   const [phaseDurationsSec, setPhaseDurationsSec] = useState<Record<string, number>>({});
+  const [importConfirmation, setImportConfirmation] = useState('');
   const phaseTimingRef = useRef<{
     uiPhase: string | null;
     phaseStartAt: number | null;
@@ -201,19 +210,25 @@ export function DatabaseOperationModal({
   const importUiPhase = useMemo(() => {
     if (wizardStep !== 'progress' || mode !== 'import') return null;
     const phase = taskStatus?.phase ?? '';
+    const subPhase = taskStatus?.sub_phase ?? '';
     const st = taskStatus?.status ?? '';
     if (st === 'completed' || st === 'failed' || st === 'cancelled') {
-      return 'import_tables';
+      return subPhase === 'finalizing' ? 'finalize' : 'import_tables';
     }
-    if (phase === 'importing' && st === 'running') return 'import_tables';
+    if (phase === 'importing' && st === 'running') {
+      return subPhase === 'finalizing' ? 'finalize' : 'import_tables';
+    }
     if (phase === 'extracting') return 'extract';
     return 'upload';
-  }, [wizardStep, mode, taskStatus?.phase, taskStatus?.status]);
+  }, [wizardStep, mode, taskStatus?.phase, taskStatus?.status, taskStatus?.sub_phase]);
 
   useEffect(() => {
+    let resetId: number | null = null;
     if (prevWizardRef.current !== 'progress' && wizardStep === 'progress') {
-      setPhaseDurationsSec({});
-      setElapsedSec(0);
+      resetId = window.setTimeout(() => {
+        setPhaseDurationsSec({});
+        setElapsedSec(0);
+      }, 0);
       if (mode === 'import') {
         phaseTimingRef.current = { uiPhase: 'upload', phaseStartAt: Date.now() };
       } else {
@@ -221,13 +236,26 @@ export function DatabaseOperationModal({
       }
     }
     prevWizardRef.current = wizardStep;
+    return () => {
+      if (resetId != null) {
+        window.clearTimeout(resetId);
+      }
+    };
   }, [wizardStep, mode]);
+
+  useEffect(() => {
+    if (!open || mode !== 'import' || wizardStep !== 'confirm') {
+      const id = window.setTimeout(() => setImportConfirmation(''), 0);
+      return () => window.clearTimeout(id);
+    }
+  }, [open, mode, wizardStep, file?.name]);
 
   useEffect(() => {
     if (!open || wizardStep !== 'progress') return;
     const t0 = Date.now();
     const id = window.setInterval(() => {
       setElapsedSec((Date.now() - t0) / 1000);
+      setNowSec(Math.floor(Date.now() / 1000));
     }, 1000);
     return () => window.clearInterval(id);
   }, [open, wizardStep, mode]);
@@ -271,14 +299,14 @@ export function DatabaseOperationModal({
         ? completionResult?.success
           ? 'Export complete'
           : 'Export failed'
-        : 'Database export'
+        : 'Load data export'
       : wizardStep === 'confirm'
-        ? 'Replace current database?'
+        ? 'Replace target load data?'
         : wizardStep === 'summary'
           ? completionResult?.success
             ? 'Import complete'
             : 'Import failed'
-          : 'Database import';
+          : 'Load data import';
 
   const subtitle =
     mode === 'export' && wizardStep === 'progress'
@@ -301,7 +329,10 @@ export function DatabaseOperationModal({
       : 0;
 
   const importTablePct =
-    taskStatus && taskStatus.total > 0 && taskStatus.phase === 'importing'
+    taskStatus &&
+    taskStatus.total > 0 &&
+    taskStatus.phase === 'importing' &&
+    ['clearing', 'loading'].includes(taskStatus.sub_phase ?? '')
       ? Math.min(100, (100 * taskStatus.current) / taskStatus.total)
       : 0;
 
@@ -445,6 +476,7 @@ export function DatabaseOperationModal({
 
   const renderImportProgress = () => {
     const phase = taskStatus?.phase ?? '';
+    const subPhase = taskStatus?.sub_phase ?? '';
     const st = taskStatus?.status ?? '';
 
     const uploadTone: StepTone = 'done';
@@ -455,13 +487,46 @@ export function DatabaseOperationModal({
 
     const extractTone: StepTone = extractDone ? 'done' : extractActive ? 'active' : 'pending';
 
-    const importDone = st === 'completed' || st === 'failed' || st === 'cancelled';
-    const importActive = phase === 'importing' && st === 'running';
+    const terminal = st === 'completed' || st === 'failed' || st === 'cancelled';
+    const loadDataActive =
+      phase === 'importing' &&
+      st === 'running' &&
+      (subPhase === '' || ['backing_up', 'clearing', 'loading'].includes(subPhase));
+    const loadDataDone = terminal || subPhase === 'finalizing';
+    const loadDataDeterminate =
+      loadDataActive &&
+      ['clearing', 'loading'].includes(subPhase) &&
+      taskStatus &&
+      taskStatus.total > 0;
+    const loadDataIndeterminate = loadDataActive && !loadDataDeterminate;
 
-    const importTone: StepTone = importDone ? 'done' : importActive ? 'active' : 'pending';
+    const loadDataTone: StepTone = loadDataDone ? 'done' : loadDataActive ? 'active' : 'pending';
+    const finalizeActive = phase === 'importing' && st === 'running' && subPhase === 'finalizing';
+    const finalizeTone: StepTone = terminal ? 'done' : finalizeActive ? 'active' : 'pending';
 
-    const statusLine = taskStatus?.progress || 'Starting…';
+    const statusLine = (() => {
+      if (taskConnectionLost) {
+        return taskConnectionMessage ?? 'Waiting for server… import may still be running.';
+      }
+      if (!taskStatus?.progress) return 'Starting…';
+      switch (taskStatus.sub_phase) {
+        case 'backing_up':
+          return 'Backing up current database to dashboard.db.bak. This can take several minutes on large databases.';
+        case 'clearing':
+        case 'loading':
+          return taskStatus.progress;
+        case 'finalizing':
+          return taskStatus.progress;
+        default:
+          return taskStatus.progress;
+      }
+    })();
+
     const eventsLoaded = taskStatus?.events_loaded;
+    const lastUpdateText =
+      typeof taskStatus?.updated_at === 'number' && nowSec > 0
+        ? `Last update: ${Math.max(0, Math.round(nowSec - taskStatus.updated_at))}s ago`
+        : null;
 
     const extractPct =
       extractActive && taskStatus && taskStatus.total > 0
@@ -470,9 +535,17 @@ export function DatabaseOperationModal({
 
     return (
       <div className="px-6 py-4 space-y-4">
-        <p className="text-xs text-muted-foreground leading-relaxed border-b border-border pb-3">
-          {statusLine}
-        </p>
+        <div className="space-y-2 border-b border-border pb-3">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {taskConnectionLost ? (taskConnectionMessage ?? 'Waiting for server… import may still be running.') : statusLine}
+          </p>
+          {lastUpdateText ? (
+            <p className="text-xs text-muted-foreground tabular-nums">{lastUpdateText}</p>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            Large database imports can take 15–30+ minutes. Keep this dialog open until you see the summary.
+          </p>
+        </div>
         <StepperTimeline>
           <PhaseStep
             label="Upload and validate"
@@ -511,40 +584,81 @@ export function DatabaseOperationModal({
           </PhaseStep>
 
           <PhaseStep
-            label="Import tables"
-            tone={importTone}
-            isLast
+            label="Load data"
+            tone={loadDataTone}
+            isLast={false}
             trailing={
-              importTone === 'done' ? (
+              loadDataTone === 'done' ? (
                 formatPhaseDuration(phaseDurationsSec.import_tables ?? 0)
-              ) : importTone === 'active' ? (
+              ) : loadDataDeterminate ? (
                 `${Math.round(importTablePct)}%`
+              ) : loadDataIndeterminate ? (
+                '…'
               ) : null
             }
           >
-            {importTone === 'active' && taskStatus && taskStatus.total > 0 ? (
+            {loadDataTone === 'active' && taskStatus ? (
               <div className="space-y-2">
+                {subPhase === 'backing_up' ? (
+                  <p className="text-xs text-muted-foreground">
+                    Copying the live database to{' '}
+                    <code className="font-mono text-xs">dashboard.db.bak</code> before replacing load
+                    data. Large files can take several minutes.
+                  </p>
+                ) : null}
                 {taskStatus.current_table ? (
                   <p className="text-xs font-mono text-foreground/90 truncate">
                     {taskStatus.current_table}
                   </p>
                 ) : null}
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  {taskStatus.current} of {taskStatus.total} tables
-                </p>
+                {loadDataDeterminate ? (
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    Step {taskStatus.current} of {taskStatus.total}
+                  </p>
+                ) : subPhase === 'backing_up' ? (
+                  <p className="text-xs text-muted-foreground">
+                    {taskStatus.progress || 'Backing up current database…'}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {taskStatus.progress || 'Working…'}
+                  </p>
+                )}
                 {typeof eventsLoaded === 'number' ? (
                   <p className="text-xs text-muted-foreground tabular-nums">
                     {eventsLoaded.toLocaleString()} events loaded
                   </p>
                 ) : null}
-                <Progress value={importTablePct} className="h-1.5" />
+                <Progress
+                  value={loadDataDeterminate ? importTablePct : 0}
+                  indeterminate={loadDataIndeterminate}
+                  className="h-1.5"
+                />
               </div>
-            ) : importTone === 'active' ? (
-              <p className="text-xs text-muted-foreground">{taskStatus?.progress || 'Working…'}</p>
-            ) : importTone === 'done' && taskStatus && taskStatus.total > 0 ? (
+            ) : loadDataTone === 'done' && taskStatus && taskStatus.total > 0 ? (
               <p className="text-xs text-muted-foreground tabular-nums">
-                {taskStatus.total} of {taskStatus.total} tables
+                {taskStatus.total} of {taskStatus.total} steps
               </p>
+            ) : null}
+          </PhaseStep>
+
+          <PhaseStep
+            label="Finalize"
+            tone={finalizeTone}
+            isLast
+            trailing={
+              finalizeTone === 'done' ? (
+                formatPhaseDuration(phaseDurationsSec.finalize ?? 0)
+              ) : finalizeTone === 'active' ? (
+                '…'
+              ) : null
+            }
+          >
+            {finalizeTone === 'active' ? (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">{statusLine}</p>
+                <Progress value={0} indeterminate className="h-1.5" />
+              </div>
             ) : null}
           </PhaseStep>
         </StepperTimeline>
@@ -561,7 +675,8 @@ export function DatabaseOperationModal({
   const summaryPhaseLabelsImport: { key: string; label: string }[] = [
     { key: 'upload', label: 'Upload and validate' },
     { key: 'extract', label: 'Extract archive' },
-    { key: 'import_tables', label: 'Import tables' },
+    { key: 'import_tables', label: 'Load data' },
+    { key: 'finalize', label: 'Finalize' },
   ];
 
   const renderSummary = () => {
@@ -629,8 +744,9 @@ export function DatabaseOperationModal({
     <div className="px-6 py-4 space-y-4">
       <div className="rounded-lg bg-muted/80 border border-border p-3">
         <p className="text-sm text-foreground">
-          <strong className="font-semibold">Warning:</strong> Importing a database will replace all
-          existing data. A backup of the current database will be created automatically.
+          <strong className="font-semibold">Warning:</strong> Importing load data will replace the
+          target system&apos;s events, measurements, channel maps, and retained load artifacts. Target
+          users, sessions, saved filters, audit history, and admin configuration are preserved.
         </p>
       </div>
 
@@ -640,7 +756,7 @@ export function DatabaseOperationModal({
           <Database className="h-5 w-5 text-muted-foreground" />
           <div className="flex-1">
             <p className="text-sm font-medium">{currentEventCount} events</p>
-            <p className="text-xs text-muted-foreground">Will be replaced</p>
+            <p className="text-xs text-muted-foreground">Target load data will be replaced</p>
           </div>
           <XCircle className="h-4 w-4 text-destructive" />
         </div>
@@ -724,10 +840,25 @@ export function DatabaseOperationModal({
       <div className="flex items-start gap-2 text-xs text-muted-foreground">
         <CheckCircle2 className="h-4 w-4 text-foreground shrink-0 mt-0.5" />
         <p>
-          Your current database will be backed up to{' '}
-          <code className="text-caption bg-muted px-1 py-0.5 rounded">dashboard.db.bak</code> before
-          import.
+          The current database file is still backed up to{' '}
+          <code className="text-caption bg-muted px-1 py-0.5 rounded">dashboard.db.bak</code>, but
+          only processed load data is replaced during import. Pending channel-map uploads and
+          retained raw files are not transferred.
         </p>
+      </div>
+
+      <div className="space-y-2">
+        <label htmlFor="import-confirmation" className="text-sm font-medium text-foreground">
+          Type {IMPORT_CONFIRMATION_TEXT} to confirm replacement
+        </label>
+        <Input
+          id="import-confirmation"
+          value={importConfirmation}
+          onChange={(event) => setImportConfirmation(event.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+          disabled={isUploadingPreview || !validation || !validation.valid}
+        />
       </div>
     </div>
   );
@@ -750,7 +881,11 @@ export function DatabaseOperationModal({
   const showProgressTimer = wizardStep === 'progress';
 
   return (
-    <AlertDialog open={open} onOpenChange={handleOpenChange}>
+    <AlertDialog
+      open={open}
+      onOpenChange={handleOpenChange}
+      backdropClassName="bg-transparent backdrop-blur-none"
+    >
       <AlertDialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <AlertDialogHeader>
           <div className="flex items-start gap-3 pr-8">
@@ -838,10 +973,13 @@ export function DatabaseOperationModal({
                   variant="destructive"
                   onClick={() => onConfirmImport?.()}
                   disabled={
-                    isUploadingPreview || !validation || !validation.valid
+                    isUploadingPreview ||
+                    !validation ||
+                    !validation.valid ||
+                    importConfirmation !== IMPORT_CONFIRMATION_TEXT
                   }
                 >
-                  Replace database
+                  Replace load data
                 </Button>
               </>
             ) : null}

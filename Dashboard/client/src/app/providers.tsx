@@ -14,6 +14,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { useState, useEffect } from 'react';
 import ClientLayout from '@/components/layout/ClientLayout';
+import { useDataVersionSync } from '@/hooks/use-data-version-sync';
 import { useAuthStore } from '@/stores/auth-store';
 
 const MAX_CACHED_QUERIES = 100;
@@ -53,6 +54,11 @@ interface ProvidersProps {
   children: React.ReactNode;
 }
 
+function DataVersionSyncBridge() {
+  useDataVersionSync();
+  return null;
+}
+
 function trimQueryCache(client: QueryClient) {
   const all = client.getQueryCache().getAll();
   if (all.length <= MAX_CACHED_QUERIES) return;
@@ -77,6 +83,7 @@ export function Providers({ children }: ProvidersProps) {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <DataVersionSyncBridge />
       <ClientLayout>
         {children}
       </ClientLayout>

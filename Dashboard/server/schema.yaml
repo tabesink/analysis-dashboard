@@ -1,53 +1,57 @@
 # RSP Data Analytics Dashboard - Database Schema
-# Source of truth for dim tables and filter options
-# Non-dim tables and index policy are currently managed in server/storage/database.py
-# Modify this file for dim schema/filter changes, then run migrations
+# Source of truth for all declared DuckDB DDL facts and dim_event filter options.
+# Runtime data behavior and backfills stay in Python migrations/storage code.
 
 version: 1
 
-# Sequences for auto-incrementing IDs
 sequences:
-  - name: seq_audit_log_id
+  seq_audit_log_id:
     start: 1
-  - name: seq_meas_lttb_id
+  seq_meas_lttb_id:
     start: 1
-  - name: seq_saved_filter_id
+  seq_saved_filter_id:
     start: 1
-  - name: seq_event_access_id
+  seq_event_access_id:
+    start: 1
+  seq_channel_map_id:
+    start: 1
+  seq_meas_raw_id:
+    start: 1
+  seq_custom_field_value_id:
+    start: 1
+  seq_event_custom_field_value_id:
+    start: 1
+  seq_ingestion_artifact_id:
     start: 1
 
-# Table definitions
 tables:
   dim_program:
     description: Program metadata
     columns:
-      - name: program_id
+      program_id:
         type: VARCHAR
         primary_key: true
-      - name: name
+      name:
         type: VARCHAR
-        nullable: true
-      - name: created_at
+      created_at:
         type: TIMESTAMP
         default: CURRENT_TIMESTAMP
 
   dim_event:
     description: Event metadata with filter columns
     columns:
-      # Core columns
-      - name: event_id
+      event_id:
         type: VARCHAR
         primary_key: true
-      - name: program_id
+      program_id:
         type: VARCHAR
         nullable: false
-      - name: version
+      version:
         type: VARCHAR
         nullable: false
-      
-      # Filter columns - each has filter config for UI
-      - name: status
+      status:
         type: VARCHAR
+        additive: true
         filter:
           display_name: "Status"
           order: 1
@@ -55,45 +59,47 @@ tables:
             - "Approved"
             - "Obsolete"
             - "Pending"
-      
-      - name: rfq
+      rfq:
         type: BOOLEAN
         default: "FALSE"
+        additive: true
         filter:
           display_name: "RFQ"
           order: 2
           values:
             - "Applicable"
             - "Not Applicable"
-      - name: dv
+      dv:
         type: BOOLEAN
         default: "FALSE"
+        additive: true
         filter:
           display_name: "DV"
           order: 3
           values:
             - "Applicable"
             - "Not Applicable"
-      - name: pv
+      pv:
         type: BOOLEAN
         default: "FALSE"
+        additive: true
         filter:
           display_name: "PV"
           order: 4
           values:
             - "Applicable"
             - "Not Applicable"
-      - name: post_prod
+      post_prod:
         type: BOOLEAN
         default: "FALSE"
+        additive: true
         filter:
           display_name: "Post-Prod"
           order: 5
           values:
             - "Applicable"
             - "Not Applicable"
-
-      - name: suspension_component
+      suspension_component:
         type: VARCHAR
         filter:
           display_name: "Suspension Component"
@@ -111,8 +117,7 @@ tables:
             - "Camber Link"
             - "Spring Link"
             - "Toe Link"
-      
-      - name: axle_location
+      axle_location:
         type: VARCHAR
         filter:
           display_name: "Axle Location"
@@ -120,16 +125,15 @@ tables:
           values:
             - "Front"
             - "Rear"
-
-      - name: gvw
+      gvw:
         type: VARCHAR
-      
-      - name: gross_vehicle_weight_range_lbs
+        additive: true
+      gross_vehicle_weight_range_lbs:
         type: VARCHAR
         filter:
           display_name: "Gross Vehicle Weight Range (lbs)"
           order: 8
-          values:
+          values: &weight_ranges
             - "1000-1500"
             - "1500-2000"
             - "2000-2500"
@@ -148,62 +152,27 @@ tables:
             - "8500-9000"
             - "9000-9500"
             - "9500-10000"
-
-      - name: fgawr
+      fgawr:
         type: VARCHAR
-      - name: fgawr_range_lbs
+        additive: true
+      fgawr_range_lbs:
         type: VARCHAR
+        additive: true
         filter:
           display_name: "FGAWR Range (lbs)"
           order: 9
-          values:
-            - "1000-1500"
-            - "1500-2000"
-            - "2000-2500"
-            - "2500-3000"
-            - "3000-3500"
-            - "3500-4000"
-            - "4000-4500"
-            - "4500-5000"
-            - "5000-5500"
-            - "5500-6000"
-            - "6000-6500"
-            - "6500-7000"
-            - "7000-7500"
-            - "7500-8000"
-            - "8000-8500"
-            - "8500-9000"
-            - "9000-9500"
-            - "9500-10000"
-
-      - name: rgawr
+          values: *weight_ranges
+      rgawr:
         type: VARCHAR
-      - name: rgawr_range_lbs
+        additive: true
+      rgawr_range_lbs:
         type: VARCHAR
+        additive: true
         filter:
           display_name: "RGAWR Range (lbs)"
           order: 10
-          values:
-            - "1000-1500"
-            - "1500-2000"
-            - "2000-2500"
-            - "2500-3000"
-            - "3000-3500"
-            - "3500-4000"
-            - "4000-4500"
-            - "4500-5000"
-            - "5000-5500"
-            - "5500-6000"
-            - "6000-6500"
-            - "6500-7000"
-            - "7000-7500"
-            - "7500-8000"
-            - "8000-8500"
-            - "8500-9000"
-            - "9000-9500"
-            - "9500-10000"
-      
-      - name: drive_type
+          values: *weight_ranges
+      drive_type:
         type: VARCHAR
         filter:
           display_name: "Drive Type"
@@ -212,9 +181,9 @@ tables:
             - "ICE"
             - "BEV"
             - "PHEV"
-
-      - name: material_construction
+      material_construction:
         type: VARCHAR
+        additive: true
         filter:
           display_name: "Mat'l & Const"
           order: 12
@@ -225,13 +194,13 @@ tables:
             - "Ductile Iron (cast)"
             - "Aluminum (forged)"
             - "Aluminum (cast)"
-      
-      - name: job_number
+      job_number:
         type: VARCHAR
-      - name: work_order
+        additive: true
+      work_order:
         type: VARCHAR
-      
-      - name: steering_position
+        additive: true
+      steering_position:
         type: VARCHAR
         filter:
           display_name: "Steering"
@@ -239,17 +208,16 @@ tables:
           values:
             - "RHS"
             - "LHS"
-
-      - name: damper_type
+      damper_type:
         type: VARCHAR
+        additive: true
         filter:
           display_name: "Damper Type"
           order: 14
           values:
             - "Coil Over"
             - "Air Suspension"
-      
-      - name: vehicle_type
+      vehicle_type:
         type: VARCHAR
         filter:
           display_name: "Vehicle Type"
@@ -262,86 +230,528 @@ tables:
             - "Heavy Duty"
             - "Off-Road"
             - "Other"
-      
-      # System/metadata columns
-      - name: source_file
+      source_file:
         type: VARCHAR
-      - name: file_hash
+      file_hash:
         type: VARCHAR(16)
-      - name: row_count
+      row_count:
         type: INTEGER
-      - name: uploaded_by_user_id
+      uploaded_by_user_id:
         type: VARCHAR
-      - name: last_updated_by_user_id
+        additive: true
+      last_updated_by_user_id:
         type: VARCHAR
-      - name: is_deleted
+        additive: true
+      phase:
+        type: VARCHAR
+        additive: true
+      is_deleted:
         type: BOOLEAN
         default: "FALSE"
-      - name: created_at
+      created_at:
         type: TIMESTAMP
         default: CURRENT_TIMESTAMP
-      - name: updated_at
+      updated_at:
         type: TIMESTAMP
 
-# ---------------------------------------------------------------------------
-# MULTI-USER PROPOSAL (SPEC ONLY - NOT ACTIVE RUNTIME SCHEMA YET)
-#
-# Purpose:
-# - Keep a single, visible source-of-truth for planned schema evolution.
-# - Document what must be added before enabling full multi-user behavior.
-#
-# IMPORTANT:
-# - This section is intentionally comments-only to avoid changing runtime behavior
-#   before migrations/services are implemented.
-# - Activate these fields via migration + code updates in lockstep.
-# ---------------------------------------------------------------------------
-#
-# Proposed version bump when activated:
-# version: 2
-#
-# Proposed new table:
-# tables:
-#   users:
-#     description: Authenticated users for multi-user app behavior
-#     columns:
-#       - name: id
-#         type: VARCHAR
-#         primary_key: true
-#       - name: username
-#         type: VARCHAR
-#         nullable: false
-#         unique: true
-#       - name: role
-#         type: VARCHAR
-#         nullable: false
-#         # allowed values in app layer: "user", "admin"
-#       - name: created_at
-#         type: TIMESTAMP
-#         default: CURRENT_TIMESTAMP
-#       - name: last_login_at
-#         type: TIMESTAMP
-#         nullable: true
-#
-# Proposed dim_event additions:
-#   - name: uploaded_by_user_id
-#     type: VARCHAR
-#     nullable: true  # migrate to NOT NULL after backfill
-#
-# Proposed sessions additions:
-#   - name: user_id
-#     type: VARCHAR
-#     nullable: false
-#   - name: rendered_event_ids
-#     type: JSON
-#     nullable: true
-#     # NOTE: resolves current API/store mismatch for rendered_event_ids
-#
-# Proposed saved_filters additions:
-#   - name: user_id
-#     type: VARCHAR
-#     nullable: false
-#
-# Proposed policy notes:
-# - Populate audit_log.user_id on all write operations.
-# - Enforce role + ownership in API/service layer even if DB FK constraints are
-#   deferred due to migration/tooling limitations.
+  dim_channel_map:
+    description: Plot channel configuration per program/version/plot_key
+    columns:
+      id:
+        type: BIGINT
+        primary_key: true
+        default: "nextval('seq_channel_map_id')"
+      program_id:
+        type: VARCHAR
+        nullable: false
+      version:
+        type: VARCHAR
+        nullable: false
+      plot_key:
+        type: VARCHAR
+        nullable: false
+      x_col:
+        type: INTEGER
+        additive: true
+      y_col:
+        type: INTEGER
+        additive: true
+      x_channel:
+        type: VARCHAR
+        nullable: false
+      y_channel:
+        type: VARCHAR
+        nullable: false
+      plot_order:
+        type: INTEGER
+        default: 0
+      x_scale_factor:
+        type: DOUBLE
+        default: 1.0
+      y_scale_factor:
+        type: DOUBLE
+        default: 1.0
+      x_unit:
+        type: VARCHAR
+      y_unit:
+        type: VARCHAR
+    constraints:
+      uq_dim_channel_map_program_version_plot:
+        type: unique
+        columns: [program_id, version, plot_key]
+
+  ingestion_artifacts:
+    description: Retained CSV artifacts for pending channel-map setup and reprocessing
+    columns:
+      artifact_id:
+        type: BIGINT
+        primary_key: true
+        default: "nextval('seq_ingestion_artifact_id')"
+      program_id:
+        type: VARCHAR
+        nullable: false
+      version:
+        type: VARCHAR
+        nullable: false
+      source_file:
+        type: VARCHAR
+        nullable: false
+      artifact_path:
+        type: VARCHAR
+        nullable: false
+      artifact_kind:
+        type: VARCHAR
+        nullable: false
+      file_hash:
+        type: VARCHAR
+        nullable: false
+      row_count:
+        type: INTEGER
+        default: 0
+      column_count:
+        type: INTEGER
+        default: 0
+        additive: true
+      preview_json:
+        type: JSON
+        additive: true
+      metadata_json:
+        type: JSON
+        additive: true
+      custom_fields_json:
+        type: JSON
+        additive: true
+      status:
+        type: VARCHAR
+        nullable: false
+        default: pending
+      error:
+        type: VARCHAR
+      event_id:
+        type: VARCHAR
+      owner_user_id:
+        type: VARCHAR
+      created_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+      updated_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+    constraints:
+      uq_ingestion_artifacts_program_version_hash:
+        type: unique
+        columns: [program_id, version, file_hash]
+
+  audit_log:
+    description: Audit trail for tracked actions
+    columns:
+      id:
+        type: BIGINT
+        primary_key: true
+        default: "nextval('seq_audit_log_id')"
+      action:
+        type: VARCHAR
+        nullable: false
+      user_id:
+        type: VARCHAR
+      event_id:
+        type: VARCHAR
+      details:
+        type: JSON
+      timestamp:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+
+  users:
+    description: Authenticated users
+    columns:
+      id:
+        type: VARCHAR
+        primary_key: true
+      username:
+        type: VARCHAR
+        nullable: false
+        unique: true
+      role:
+        type: VARCHAR
+        nullable: false
+      password_hash:
+        type: VARCHAR
+      can_write:
+        type: BOOLEAN
+        default: "FALSE"
+        additive: true
+      token_version:
+        type: INTEGER
+        default: 0
+        additive: true
+      created_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+      last_login_at:
+        type: TIMESTAMP
+      last_settings_visit_at:
+        type: TIMESTAMP
+        additive: true
+
+  measurements_raw:
+    description: Raw time-series signal data in long format
+    columns:
+      id:
+        type: BIGINT
+        primary_key: true
+        default: "nextval('seq_meas_raw_id')"
+      event_id:
+        type: VARCHAR
+        nullable: false
+      timestamp:
+        type: DOUBLE
+        nullable: false
+      channel_name:
+        type: VARCHAR
+        nullable: false
+      value:
+        type: DOUBLE
+
+  measurements_lttb:
+    description: LTTB-downsampled plot data
+    columns:
+      id:
+        type: BIGINT
+        primary_key: true
+        default: "nextval('seq_meas_lttb_id')"
+      event_id:
+        type: VARCHAR
+        nullable: false
+      plot_key:
+        type: VARCHAR
+        nullable: false
+      x:
+        type: FLOAT
+        nullable: false
+      y:
+        type: FLOAT
+        nullable: false
+
+  sessions:
+    description: User session state
+    columns:
+      session_id:
+        type: VARCHAR
+        primary_key: true
+      user_id:
+        type: VARCHAR
+        additive: true
+      data_state:
+        type: JSON
+        additive: true
+      baseline_state:
+        type: JSON
+      new_data_state:
+        type: JSON
+      global_filters:
+        type: JSON
+      rendered_event_ids:
+        type: JSON
+        additive: true
+      ui_preferences:
+        type: JSON
+      inspect_damage_state:
+        type: JSON
+        additive: true
+      created_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+      updated_at:
+        type: TIMESTAMP
+      expires_at:
+        type: TIMESTAMP
+
+  upload_tasks:
+    description: Upload task state for async CSV progress streaming
+    columns:
+      task_id:
+        type: VARCHAR
+        primary_key: true
+      created_by_user_id:
+        type: VARCHAR
+        nullable: false
+      status:
+        type: VARCHAR
+        nullable: false
+      phase:
+        type: VARCHAR
+        nullable: false
+      completed_events:
+        type: INTEGER
+        default: 0
+      total_events:
+        type: INTEGER
+        default: 0
+      current_event:
+        type: VARCHAR
+      error:
+        type: VARCHAR
+      result_json:
+        type: JSON
+      created_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+      updated_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+      expires_at:
+        type: TIMESTAMP
+        nullable: false
+
+  saved_filters:
+    description: Saved filter presets
+    columns:
+      id:
+        type: BIGINT
+        primary_key: true
+        default: "nextval('seq_saved_filter_id')"
+      user_id:
+        type: VARCHAR
+        additive: true
+      name:
+        type: VARCHAR
+        nullable: false
+      data_state:
+        type: JSON
+        additive: true
+      baseline_state:
+        type: JSON
+      new_data_state:
+        type: JSON
+      global_filters:
+        type: JSON
+      is_default:
+        type: BOOLEAN
+        default: "FALSE"
+      created_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+
+  user_preferences:
+    description: Per-user UI preferences
+    columns:
+      user_id:
+        type: VARCHAR
+        primary_key: true
+        default: default
+      pinned_baseline_event_id:
+        type: VARCHAR
+      default_program_id:
+        type: VARCHAR
+      grid_columns:
+        type: INTEGER
+        default: 3
+      grid_layout_order:
+        type: JSON
+      theme:
+        type: VARCHAR
+        default: light
+      baseline_opacity:
+        type: FLOAT
+        default: 0.5
+      created_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+      updated_at:
+        type: TIMESTAMP
+
+  event_access_log:
+    description: Event access tracking
+    columns:
+      id:
+        type: BIGINT
+        primary_key: true
+        default: "nextval('seq_event_access_id')"
+      event_id:
+        type: VARCHAR
+        nullable: false
+      access_type:
+        type: VARCHAR
+        nullable: false
+      partition:
+        type: VARCHAR
+      accessed_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+
+  custom_field_definitions:
+    description: Admin-defined custom filter fields
+    columns:
+      field_key:
+        type: VARCHAR
+        primary_key: true
+      display_name:
+        type: VARCHAR
+        nullable: false
+        unique: true
+      data_type:
+        type: VARCHAR
+        nullable: false
+        default: string
+      is_filterable:
+        type: BOOLEAN
+        default: "TRUE"
+      created_by_user_id:
+        type: VARCHAR
+      created_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+      updated_at:
+        type: TIMESTAMP
+
+  custom_field_allowed_values:
+    description: Program-scoped allowed values for custom fields
+    columns:
+      id:
+        type: BIGINT
+        primary_key: true
+        default: "nextval('seq_custom_field_value_id')"
+      field_key:
+        type: VARCHAR
+        nullable: false
+      program_id:
+        type: VARCHAR
+        nullable: false
+      value:
+        type: VARCHAR
+        nullable: false
+      sort_order:
+        type: INTEGER
+        default: 0
+      created_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+    constraints:
+      uq_custom_field_allowed_values_field_program_value:
+        type: unique
+        columns: [field_key, program_id, value]
+
+  event_custom_field_values:
+    description: Event-level custom field values
+    columns:
+      id:
+        type: BIGINT
+        primary_key: true
+        default: "nextval('seq_event_custom_field_value_id')"
+      event_id:
+        type: VARCHAR
+        nullable: false
+      field_key:
+        type: VARCHAR
+        nullable: false
+      value:
+        type: VARCHAR
+        nullable: false
+      created_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+    constraints:
+      uq_event_custom_field_values_event_field:
+        type: unique
+        columns: [event_id, field_key]
+
+  _schema_metadata:
+    description: Runtime schema metadata for portability
+    columns:
+      key:
+        type: VARCHAR
+        primary_key: true
+      value:
+        type: JSON
+      updated_at:
+        type: TIMESTAMP
+        default: CURRENT_TIMESTAMP
+
+indexes:
+  idx_event_program:
+    table: dim_event
+    columns: [program_id]
+  idx_event_version:
+    table: dim_event
+    columns: [program_id, version]
+  idx_event_status:
+    table: dim_event
+    columns: [status]
+  idx_event_deleted:
+    table: dim_event
+    columns: [is_deleted]
+  idx_event_file_hash:
+    table: dim_event
+    columns: [file_hash]
+  idx_channel_map:
+    table: dim_channel_map
+    columns: [program_id, version]
+  idx_meas_raw_event:
+    table: measurements_raw
+    columns: [event_id]
+  idx_meas_raw_event_channel:
+    table: measurements_raw
+    columns: [event_id, channel_name]
+  idx_meas_lttb_event:
+    table: measurements_lttb
+    columns: [event_id, plot_key]
+  idx_meas_lttb_covering:
+    table: measurements_lttb
+    columns: [plot_key, event_id, x, y]
+  idx_sessions_expires:
+    table: sessions
+    columns: [expires_at]
+  idx_sessions_user:
+    table: sessions
+    columns: [user_id]
+  idx_upload_tasks_user:
+    table: upload_tasks
+    columns: [created_by_user_id]
+  idx_upload_tasks_expires:
+    table: upload_tasks
+    columns: [expires_at]
+  idx_event_uploaded_by_user:
+    table: dim_event
+    columns: [uploaded_by_user_id]
+  idx_saved_filters_user:
+    table: saved_filters
+    columns: [user_id]
+  idx_users_username:
+    table: users
+    columns: [username]
+  idx_event_access_recent:
+    table: event_access_log
+    columns: ["accessed_at DESC"]
+  idx_custom_field_definitions_filterable:
+    table: custom_field_definitions
+    columns: [is_filterable]
+  idx_custom_field_allowed_values_lookup:
+    table: custom_field_allowed_values
+    columns: [field_key, program_id, sort_order]
+  idx_event_custom_field_values_event:
+    table: event_custom_field_values
+    columns: [event_id]
+  idx_event_custom_field_values_field:
+    table: event_custom_field_values
+    columns: [field_key, value]

@@ -71,14 +71,14 @@ export default function DashboardPage({ config }: DashboardPageProps = {}) {
 
   if (authStatus === 'loading' || authStatus === 'idle') {
     return (
-      <main className="flex-1 flex items-center justify-center min-h-[calc(100vh-3.5rem)]">
+      <div className="flex-1 flex items-center justify-center min-h-[calc(100vh-3.5rem)]">
         <LoadingSpinner size="lg" />
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="flex-1 p-4 min-h-[calc(100vh-3.5rem)]">
+    <div className="flex-1 p-4 min-h-[calc(100vh-3.5rem)]">
       <div className="flex gap-0 h-[calc(100vh-7rem)]">
         <SidePanel />
         <DashboardContent
@@ -87,6 +87,6 @@ export default function DashboardPage({ config }: DashboardPageProps = {}) {
           onTabChange={handleTabChange}
         />
       </div>
-    </main>
+    </div>
   );
 }

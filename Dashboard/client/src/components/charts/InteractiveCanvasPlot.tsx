@@ -15,7 +15,7 @@ import { getCurveDisplayColor } from '@/lib/chart-utils/color';
 import { usePinnedEventsStore } from '@/stores/pinned-events-store';
 import { useTabVisibility } from '@/hooks/use-tab-visibility';
 import { PlotTooltip } from './PlotTooltip';
-import { SVGAxes } from './SVGAxes';
+import { AXIS_TYPOGRAPHY, SVGAxes } from './SVGAxes';
 import type { Curve, PlotConfig, ColorConfig, AxisLimits } from './types';
 
 // ============================================================================
@@ -322,8 +322,8 @@ export function InteractiveCanvasPlot({
           height={height}
           padding={padding}
           config={{ ...config, gridCount: GRID_COUNT }}
-          tickFontSize={18}
-          labelFontSize={20}
+          tickFontSize={AXIS_TYPOGRAPHY.interactive.tick}
+          labelFontSize={AXIS_TYPOGRAPHY.interactive.label}
         />
       </svg>
       <canvas

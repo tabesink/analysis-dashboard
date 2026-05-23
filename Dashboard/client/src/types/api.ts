@@ -55,6 +55,8 @@ export type GlobalFilters = Record<string, string[] | string | undefined> & {
 
 // Events request/response
 export interface EventsRequest {
+  program_ids?: string[];
+  versions?: string[];
   global_filters: GlobalFilters;
 }
 
@@ -64,7 +66,7 @@ export interface EventsResponse {
   has_more: boolean;
 }
 
-export interface EventMetadataUpdateRequest {
+export interface EventMetadataUpdateFields {
   job_number?: string | null;
   work_order?: string | null;
   rfq?: boolean | null;
@@ -84,10 +86,14 @@ export interface EventMetadataUpdateRequest {
   status?: string | null;
 }
 
+export interface EventMetadataUpdateRequest extends EventMetadataUpdateFields {
+  if_unmodified_since: string | null;
+}
+
 export interface ProgramVersionMetadataUpdateRequest {
   program_id: string;
   version: string;
-  updates: EventMetadataUpdateRequest;
+  updates: EventMetadataUpdateFields;
 }
 
 export interface ProgramVersionMetadataUpdateResponse {
@@ -163,6 +169,31 @@ export interface ChannelMapProcessResult {
   total_rows: number;
   processed: Array<Record<string, unknown>>;
   failed: Array<Record<string, unknown>>;
+}
+
+export interface DamageChannelMetadata {
+  channel_key: string;
+  channel_name: string;
+  unit?: string | null;
+}
+
+export interface DamageCell {
+  damage: number | null;
+  status: string;
+  error?: string | null;
+}
+
+export interface DamageInspectRow {
+  event_id: string;
+  job_number?: string | null;
+  work_order?: string | null;
+  program_id: string;
+  damages: Record<string, DamageCell>;
+}
+
+export interface DamageInspectResponse {
+  channels: DamageChannelMetadata[];
+  rows: DamageInspectRow[];
 }
 
 // ============================================================================

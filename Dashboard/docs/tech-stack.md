@@ -1,7 +1,8 @@
 # Tech Stack
 
-**Version:** 1.0
-**Last Updated:** 2026-03-20
+**Version:** 1.1
+**Last Updated:** 2026-05-21
+**App version:** 1.3.7
 
 ---
 
@@ -34,7 +35,7 @@
 | UI Library | React | 19.2.3 | Component framework |
 | Primitives | Radix UI | Various | Accessible headless components (13 packages) |
 | Styling | Tailwind CSS | 4 | Utility-first CSS |
-| State | Zustand | 5.0.9 | Client state management (6 stores) |
+| State | Zustand | 5.0.9 | Client state management (auth, ui, render, pinned-events, plot-settings, color-selection) |
 | Server State | TanStack React Query | 5.90.12 | Async state, caching, sync |
 | Forms | React Hook Form | 7.69 | Form state management |
 | Validation | Zod | 4.2.1 | Schema validation |
@@ -55,16 +56,18 @@
 | pytest-cov | Coverage reporting |
 | httpx | API test client |
 | ESLint | Frontend linting |
-| Playwright | E2E browser testing (scaffolded) |
+| Vitest | Frontend unit tests (API client, sync, export, workspace, version label) |
+| Playwright | E2E browser testing (dependency only; suite not written) |
 
 ## Infrastructure
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| Containerization | Docker Compose | Two services: `server` (port 8000), `client` (port 3000) |
-| Data Storage | DuckDB file | Single `dashboard.db` in `dashboard_data` volume at runtime |
-| Portable backup | Parquet (ZSTD) + SQL in ZIP | Admin export/import (`dashboard_export.zip`); see `docs/database-schema.txt` NOTES |
-| Logs | Named volume | `dashboard_logs` volume |
+| Containerization | Docker Compose | Repo-level `Deployment/docker-compose.yml` release bundle with `proxy`, `jwt-init`, `server`, and `client` services |
+| Data Storage | DuckDB file | Single `dashboard.db` in `dashboard-data` volume at runtime |
+| Portable backup | Parquet (ZSTD) + SQL in ZIP | Admin load-data export/import (`dashboard_export.zip`); see `docs/notes/database.md` |
+| CI | GitHub Actions | Version sync workflow (`.github/workflows/version-sync.yml`) |
+| Logs | Named volume | `dashboard-logs` volume |
 
 ---
 
@@ -82,6 +85,10 @@
 
 **Binary data transfer** -- Plot data can be sent as compact binary payloads (not JSON) for large curve sets, decoded by a Web Worker on the client.
 
-**Session persistence** -- Server-synced session state (partitions, filters, rendered events) with client-side sessionStorage backup and debounced server sync.
+**Session persistence** -- Server-synced session state (filters, rendered events) with client-side sessionStorage backup and debounced server sync.
+
+**Cross-user sync** -- Monotonic `data_version` in `_schema_metadata`; clients poll `/api/v1/sync/version` and invalidate TanStack Query caches on change.
 
 **In-memory TTL cache** -- `SimpleCache` with per-key TTL for query results. Process-local (no Redis). Fine for single-instance deployment.
+
+**Load-data portability** -- Admin export produces a Parquet ZIP of processed tables only. Import loads into a staging DuckDB file and atomically replaces live load data while preserving target users and configuration.

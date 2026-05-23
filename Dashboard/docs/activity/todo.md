@@ -1,1 +1,0 @@
-[] Horizontal scroll in the database page only appears at the bttom of the table. Instead it needs to appear at the bottom of the visible table are so the user doesnt have to scroll all the way down to scroll horizontally

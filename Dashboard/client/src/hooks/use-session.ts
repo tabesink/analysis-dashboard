@@ -31,12 +31,28 @@ import {
   saveSessionBackup,
 } from '@/lib/session/session-sync';
 
+let sharedSessionId: string | null | undefined;
+let sharedCreatePromise: Promise<SessionResponse> | null = null;
+const sessionIdListeners = new Set<(sessionId: string | null) => void>();
+
+function getSharedSessionId(): string | null {
+  if (sharedSessionId === undefined) {
+    sharedSessionId = getInitialSessionId();
+  }
+  return sharedSessionId;
+}
+
+function publishSessionId(nextSessionId: string | null) {
+  sharedSessionId = nextSessionId;
+  sessionIdListeners.forEach((listener) => listener(nextSessionId));
+}
+
 export function useSession() {
   const queryClient = useQueryClient();
   const isCreatingRef = useRef(false);
 
   // Session ID state
-  const [sessionId, setSessionId] = useState<string | null>(getInitialSessionId);
+  const [sessionId, setSessionId] = useState<string | null>(getSharedSessionId);
 
   // Pending updates to sync to server (accumulated between syncs)
   const pendingUpdatesRef = useRef<Partial<SessionState>>({});
@@ -59,14 +75,19 @@ export function useSession() {
   // Create session mutation - restores from backup if available
   const createMutation = useMutation({
     mutationFn: () => {
-      const backup = getSessionBackup();
-      const initialState = getDefaultSessionState(backup);
-      return sessionApi.create(initialState);
+      if (!sharedCreatePromise) {
+        const backup = getSessionBackup();
+        const initialState = getDefaultSessionState(backup);
+        sharedCreatePromise = sessionApi.create(initialState).finally(() => {
+          sharedCreatePromise = null;
+        });
+      }
+      return sharedCreatePromise;
     },
     onSuccess: (newSession) => {
       const newId = newSession.session_id;
       localStorage.setItem(SESSION_ID_KEY, newId);
-      setSessionId(newId);
+      publishSessionId(newId);
       queryClient.setQueryData(['session', newId], newSession);
       clearSessionBackup(); // Clear backup after successful restore
       if (sessionId && sessionId !== newId) {
@@ -161,13 +182,20 @@ export function useSession() {
     const newSession = await sessionApi.create(getDefaultSessionState());
     const newId = newSession.session_id;
     localStorage.setItem(SESSION_ID_KEY, newId);
-    setSessionId(newId);
+    publishSessionId(newId);
     queryClient.setQueryData(['session', newId], newSession);
     if (sessionId && sessionId !== newId) {
       queryClient.removeQueries({ queryKey: ['session', sessionId] });
     }
     return newSession;
   }, [sessionId, queryClient]);
+
+  useEffect(() => {
+    sessionIdListeners.add(setSessionId);
+    return () => {
+      sessionIdListeners.delete(setSessionId);
+    };
+  }, []);
 
   // Periodic backup to sessionStorage (protects against session expiry)
   useEffect(() => {

@@ -120,6 +120,40 @@ def cmd_diff(runner: MigrationRunner) -> int:
         print("ℹ️  Extra tables (not in schema.yaml):")
         for table in diff['extra_tables']:
             print(f"  - {table}")
+
+    doctor_summary = diff.get("doctor_summary", {})
+    doctor_report = diff.get("doctor_report", [])
+    if doctor_report:
+        print()
+        print("Schema doctor summary:")
+        for status in ("OK", "MISSING", "TYPE_MISMATCH", "DRIFT"):
+            print(f"  - {status}: {doctor_summary.get(status, 0)}")
+
+        print()
+        print("Schema doctor table report:")
+        for entry in sorted(doctor_report, key=lambda item: item["table"]):
+            status = entry["status"]
+            table = entry["table"]
+            details = entry.get("details", {})
+            print(f"  - [{status}] {table}")
+
+            type_mismatches = details.get("type_mismatches", [])
+            missing_columns = details.get("missing_columns", [])
+            extra_columns = details.get("extra_columns", [])
+            reason = details.get("reason")
+
+            if reason:
+                print(f"      reason: {reason}")
+            if missing_columns:
+                print(f"      missing_columns: {', '.join(missing_columns)}")
+            if extra_columns:
+                print(f"      extra_columns: {', '.join(extra_columns)}")
+            if type_mismatches:
+                for mismatch in type_mismatches:
+                    print(
+                        "      type_mismatch: "
+                        f"{mismatch['column']} declared={mismatch['declared_type']} live={mismatch['live_type']}"
+                    )
     
     return 0
 

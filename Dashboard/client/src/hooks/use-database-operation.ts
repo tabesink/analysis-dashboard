@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
-import { exportApi } from '@/lib/api';
+import { exportApi, inferImportOutcomeAfterTaskLost } from '@/lib/api';
 import type {
   DatabaseValidationResponse,
   TaskStatusResponse,
@@ -13,6 +13,7 @@ import type {
   DatabaseWizardStep,
   DatabaseOperationModalProps,
 } from '@/components/upload/DatabaseOperationModal';
+import { useUIStore } from '@/stores/ui-store';
 
 function estimateDownloadTime(sizeMb: number): string | null {
   const connection = (navigator as Navigator & { connection?: { downlink?: number } }).connection;
@@ -53,7 +54,10 @@ export function useDatabaseOperation({
 
   const [taskStatus, setTaskStatus] = useState<TaskStatusResponse | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [taskConnectionLost, setTaskConnectionLost] = useState(false);
+  const [taskConnectionMessage, setTaskConnectionMessage] = useState<string | undefined>();
   const [isCancelling, setIsCancelling] = useState(false);
+  const setDatabaseImportInProgress = useUIStore((s) => s.setDatabaseImportInProgress);
 
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -79,6 +83,8 @@ export function useDatabaseOperation({
     setWizardStep('confirm');
     setTaskStatus(null);
     setActiveTaskId(null);
+    setTaskConnectionLost(false);
+    setTaskConnectionMessage(undefined);
     setIsCancelling(false);
     setCompletionResult(null);
     setExportDownloadActive(false);
@@ -142,6 +148,8 @@ export function useDatabaseOperation({
       setCompletionResult(null);
       setTaskStatus(null);
       setActiveTaskId(null);
+      setTaskConnectionLost(false);
+      setTaskConnectionMessage(undefined);
       setIsCancelling(false);
       setExportDownloadActive(false);
       setExportFileName(fileName);
@@ -206,7 +214,7 @@ export function useDatabaseOperation({
         setCompletionResult({
           success: true,
           title: 'Export complete',
-          message: 'Compressed archive saved successfully.',
+          message: 'Load-data archive saved successfully.',
           elapsedSeconds: (Date.now() - started) / 1000,
           detailLines: [
             `File: ${fileName}`,
@@ -217,10 +225,10 @@ export function useDatabaseOperation({
           ].filter(Boolean),
         });
         setWizardStep('summary');
-        toast.success('Database exported successfully');
+        toast.success('Load data exported successfully');
       } catch (error: unknown) {
         const message =
-          error instanceof Error ? error.message : 'Failed to export database';
+          error instanceof Error ? error.message : 'Failed to export load data';
         setCompletionResult({
           success: false,
           title: 'Export failed',
@@ -228,7 +236,7 @@ export function useDatabaseOperation({
           elapsedSeconds: (Date.now() - started) / 1000,
         });
         setWizardStep('summary');
-        toast.error(`Export failed: ${message}`);
+        toast.error(`Load-data export failed: ${message}`);
       } finally {
         setIsExporting(false);
         setExportProgress('');
@@ -264,7 +272,7 @@ export function useDatabaseOperation({
         suggestedName: 'dashboard_export.zip',
         types: [
           {
-            description: 'Compressed database export',
+            description: 'Compressed load-data export',
             accept: { 'application/zip': ['.zip'] },
           },
         ],
@@ -301,6 +309,8 @@ export function useDatabaseOperation({
       setWizardStep('confirm');
       setCompletionResult(null);
       setTaskStatus(null);
+      setTaskConnectionLost(false);
+      setTaskConnectionMessage(undefined);
       setIsCancelling(false);
       setPendingImportFile(file);
       setPendingUploadId(null);
@@ -372,7 +382,10 @@ export function useDatabaseOperation({
 
     setWizardStep('progress');
     setTaskStatus(null);
+    setTaskConnectionLost(false);
+    setTaskConnectionMessage(undefined);
     setIsImporting(true);
+    setDatabaseImportInProgress(true);
     setIsCancelling(false);
 
     const started = Date.now();
@@ -380,9 +393,16 @@ export function useDatabaseOperation({
       const { task_id } = await exportApi.startParquetImport(pendingUploadId);
       setActiveTaskId(task_id);
 
-      const final = await exportApi.waitForParquetTask(task_id, (s) => {
-        setTaskStatus(s);
-      });
+      const final = await exportApi.waitForParquetTask(
+        task_id,
+        (s) => {
+          setTaskStatus(s);
+        },
+        (state) => {
+          setTaskConnectionLost(state.connectionLost);
+          setTaskConnectionMessage(state.message);
+        },
+      );
 
       setActiveTaskId(null);
       setIsCancelling(false);
@@ -410,6 +430,7 @@ export function useDatabaseOperation({
           title: 'Import failed',
           message: final.error || 'Import failed',
           elapsedSeconds: (Date.now() - started) / 1000,
+          detailLines: ['Check server logs before retrying if the API was unavailable during import.'],
         });
         setWizardStep('summary');
         return;
@@ -426,7 +447,7 @@ export function useDatabaseOperation({
       setCompletionResult({
         success: true,
         title: 'Import complete',
-        message: `${result?.events ?? '—'} events loaded. A backup of the previous database was saved.`,
+        message: `${result?.events ?? '—'} events loaded. Target users and admin configuration were preserved.`,
         elapsedSeconds: (Date.now() - started) / 1000,
         eventsLoaded: typeof result?.events === 'number' ? result.events : undefined,
         detailLines: ['Backup file: dashboard.db.bak (next to your live database)'],
@@ -434,24 +455,63 @@ export function useDatabaseOperation({
       setWizardStep('summary');
 
       toast.success(
-        `Database imported successfully! ${result?.events ?? '—'} events loaded. Backup saved.`,
+        `Load data imported successfully. ${result?.events ?? '—'} events loaded.`,
         { duration: 5000 },
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to import database';
+      const baseMessage =
+        error instanceof Error ? error.message : 'Failed to import load data';
+      const lostTaskState =
+        baseMessage.includes('no longer available') ||
+        baseMessage.includes('Lost contact with the server');
+
+      let inferred: Awaited<ReturnType<typeof inferImportOutcomeAfterTaskLost>> | null = null;
+      if (lostTaskState) {
+        inferred = await inferImportOutcomeAfterTaskLost(importValidation);
+        if (inferred.likelySucceeded) {
+          onImportComplete();
+          setPendingUploadId(null);
+          setPendingImportFile(null);
+          setImportValidation(null);
+          setCompletionResult({
+            success: true,
+            title: 'Import may have completed',
+            message: inferred.message,
+            elapsedSeconds: (Date.now() - started) / 1000,
+            eventsLoaded: inferred.eventCount,
+            detailLines: [
+              'Task polling stopped because the API restarted or lost task state.',
+              'Backup file: dashboard.db.bak (if import ran far enough)',
+            ],
+          });
+          setWizardStep('summary');
+          toast.success(inferred.message, { duration: 8000 });
+          return;
+        }
+      }
+
+      const message =
+        lostTaskState && inferred
+          ? `${baseMessage}\n\n${inferred.message}`
+          : baseMessage;
+
       setCompletionResult({
         success: false,
         title: 'Import failed',
         message,
         elapsedSeconds: (Date.now() - started) / 1000,
+        detailLines: [
+          'Check server logs for Database imported, Import task failed, OOM, or killed before retrying.',
+        ],
       });
       setWizardStep('summary');
-      toast.error(`Import failed: ${message}`);
+      toast.error(`Load-data import failed: ${baseMessage}`);
     } finally {
       setIsImporting(false);
+      setDatabaseImportInProgress(false);
       setIsCancelling(false);
     }
-  }, [pendingUploadId, onImportComplete]);
+  }, [pendingUploadId, onImportComplete, setDatabaseImportInProgress]);
 
   const blocking =
     (mode === 'export' && wizardStep === 'progress' && isExporting) ||
@@ -474,6 +534,8 @@ export function useDatabaseOperation({
     currentEventCount,
     onConfirmImport: confirmImport,
     taskStatus,
+    taskConnectionLost,
+    taskConnectionMessage,
     activeTaskId,
     isCancelling,
     onCancelOperation: cancelOperation,

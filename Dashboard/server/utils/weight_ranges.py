@@ -43,8 +43,9 @@ def derive_range_bucket(raw_value: Any) -> str | None:
         value = float(text)
     except ValueError:
         return None
-    for low, high in WEIGHT_RANGE_BUCKETS:
-        if low <= value <= high:
+    for index, (low, high) in enumerate(WEIGHT_RANGE_BUCKETS):
+        is_last_bucket = index == len(WEIGHT_RANGE_BUCKETS) - 1
+        if low <= value < high or (is_last_bucket and value == high):
             return f"{low}-{high}"
     return None
 

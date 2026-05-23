@@ -358,7 +358,7 @@ export function PlotGrid({
       )}
 
       {/* Plot Grid */}
-      <div className="flex-1 overflow-auto px-4 pt-2 pb-12">
+      <div className="flex-1 overflow-auto px-4 pt-2 pb-4">
         <div className={`grid ${gridCols} gap-3`}>
           {(DEFAULT_PLOT_KEYS_ARRAY as readonly string[]).map((plotKey) => (
             <PlotGridItem

@@ -4,22 +4,28 @@
 
 import { sanitizeErrorMessage } from '@/lib/utils/sanitize';
 
+export const AUTH_UNAUTHORIZED_EVENT = 'rsp:auth:unauthorized';
+
 /**
  * Resolve the API base URL.
  *
  * Resolution order (per call, so a single image works on any host):
- *   1. `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_BACKEND_BASE_URL` (build- or
+ *   1. `NEXT_PUBLIC_API_MODE=same-origin` returns relative URLs for proxy
+ *      deployments where the browser and API share one origin.
+ *   2. `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_BACKEND_BASE_URL` (build- or
  *      runtime-injected env). Wins when set, preserving back-compat with
  *      deployments that pin the URL.
- *   2. In the browser, `<protocol>//<window.location.hostname>:<SERVER_PORT>`.
+ *   3. In the browser, `<protocol>//<window.location.hostname>:<SERVER_PORT>`.
  *      Lets one client image work on any LAN host without a build-time bake
  *      or a reverse proxy.
- *   3. Server-side render fallback: `http://localhost:8000`.
+ *   4. Server-side render fallback: `http://localhost:8000`.
  *
  * The default server port (8000) can be overridden at build time via
  * `NEXT_PUBLIC_API_PORT` for non-default deployments.
  */
 function resolveApiBase(): string {
+  if (process.env.NEXT_PUBLIC_API_MODE === 'same-origin') return '';
+
   const fromEnv =
     process.env.NEXT_PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_BACKEND_BASE_URL;
   if (fromEnv && fromEnv.length > 0) return fromEnv;
@@ -52,6 +58,11 @@ export class APIError extends Error {
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const body = await response.json().catch(() => null);
+    if (response.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent(AUTH_UNAUTHORIZED_EVENT, { detail: { body } })
+      );
+    }
     throw new APIError(response.status, response.statusText, body);
   }
   if (response.status === 204 || response.status === 205) {

@@ -1,11 +1,12 @@
 import { create } from 'zustand';
 
-import { APIError } from '@/lib/api/client';
+import { APIError, AUTH_UNAUTHORIZED_EVENT } from '@/lib/api/client';
 import {
   authApi,
   type ChangePasswordRequest,
   type CurrentUser,
 } from '@/lib/api/auth';
+import { SESSION_ID_KEY, clearSessionBackup } from '@/lib/session/session-sync';
 
 type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'unauthenticated';
 
@@ -17,7 +18,14 @@ interface AuthState {
   register: (username: string, password: string) => Promise<void>;
   changePassword: (payload: ChangePasswordRequest) => Promise<void>;
   refresh: () => Promise<void>;
+  forceUnauthenticated: () => void;
   logout: () => Promise<void>;
+}
+
+function clearClientSessionStorage(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(SESSION_ID_KEY);
+  clearSessionBackup();
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -39,11 +47,13 @@ export const useAuthStore = create<AuthState>((set) => ({
   login: async (username, password) => {
     set({ status: 'loading' });
     const user = await authApi.login({ username, password });
+    clearClientSessionStorage();
     set({ user, status: 'authenticated' });
   },
   register: async (username, password) => {
     set({ status: 'loading' });
     const user = await authApi.register({ username, password });
+    clearClientSessionStorage();
     set({ user, status: 'authenticated' });
   },
   changePassword: async (payload) => {
@@ -57,14 +67,35 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Leave existing state untouched on transient failures.
     }
   },
-  logout: async () => {
-    await authApi.logout();
+  forceUnauthenticated: () => {
+    clearClientSessionStorage();
     set({ user: null, status: 'unauthenticated' });
     if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
       window.location.replace('/login');
     }
   },
+  logout: async () => {
+    try {
+      await authApi.logout();
+    } finally {
+      clearClientSessionStorage();
+      set({ user: null, status: 'unauthenticated' });
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.replace('/login');
+      }
+    }
+  },
 }));
+
+if (typeof window !== 'undefined') {
+  const authWindow = window as Window & { __rspUnauthorizedListener?: boolean };
+  if (!authWindow.__rspUnauthorizedListener) {
+    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, () => {
+      useAuthStore.getState().forceUnauthenticated();
+    });
+    authWindow.__rspUnauthorizedListener = true;
+  }
+}
 
 export const selectIsAdmin = (state: { user: CurrentUser | null }) =>
   state.user?.role === 'admin';

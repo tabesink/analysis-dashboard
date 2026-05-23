@@ -30,8 +30,13 @@ lttb_point_budget: 100
 lttb_reduction_factor: 0.4
 
 # Query limits
-max_upload_size_mb: 15000
+max_upload_size_mb: 61440
 max_events_per_query: 200
+
+# Staging Parquet import (match server mem_limit headroom in docker-compose.yml)
+duckdb_import_memory_limit: "10GB"
+duckdb_import_threads: 1
+duckdb_live_memory_limit_during_import: "1GB"
 
 # Performance monitoring
 enable_performance_metrics: true

@@ -1,4 +1,5 @@
 import {
+  Calculator,
   Database,
   FilePen,
   LayoutDashboardIcon,
@@ -20,7 +21,7 @@ export const getSidebarConfig = (): SidebarConfig => ({
       disabledTooltip: 'Read-only access — contact admin',
     },
     {
-      title: 'Edit Filters',
+      title: 'Edit Metadata',
       url: '/database/edit',
       icon: FilePen,
       requirePermission: 'write',
@@ -30,6 +31,11 @@ export const getSidebarConfig = (): SidebarConfig => ({
       title: 'Dashboard',
       url: '/dashboard',
       icon: LayoutDashboardIcon,
+    },
+    {
+      title: 'Inspect Damage',
+      url: '/inspect-damage',
+      icon: Calculator,
     },
   ],
 });

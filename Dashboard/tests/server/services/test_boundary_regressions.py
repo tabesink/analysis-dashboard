@@ -1,4 +1,6 @@
-clear
+import pytest
+
+from server.modules.filter_semantics.errors import UnknownFilterFieldError
 from server.services.query import QueryService
 from server.services.session import SessionManager
 from server.services.upload_query import UploadQueryService
@@ -76,3 +78,58 @@ def test_session_manager_enforces_user_scoped_access(test_database) -> None:
     assert session_manager.get(session_id, user_a["id"]) is not None
     assert session_manager.get(session_id, user_b["id"]) is None
     assert session_manager.update(session_id, user_b["id"], {"global_filters": {}}) is False
+
+
+def test_session_manager_persists_inspect_damage_state_without_wiping_data_state(
+    test_database,
+) -> None:
+    session_manager = SessionManager(test_database)
+    user = test_database.create_user("inspect_damage_session_user")
+
+    session_id = session_manager.create(
+        user["id"],
+        {
+            "data_state": {
+                "program_ids": [],
+                "versions": [],
+                "selected_event_ids": ["dashboard-event"],
+            },
+            "inspect_damage_state": {
+                "selected_event_ids": ["inspect-event"],
+                "table_preferences": {
+                    "expanded_versions": ["P1::V1"],
+                    "sort_field": "work_order",
+                },
+            },
+        },
+    )
+
+    assert session_manager.update(
+        session_id,
+        user["id"],
+        {"inspect_damage_state": {"selected_event_ids": ["inspect-event-2"]}},
+    )
+
+    session = session_manager.get(session_id, user["id"])
+    assert session is not None
+    assert session["data_state"]["selected_event_ids"] == ["dashboard-event"]
+    assert session["inspect_damage_state"]["selected_event_ids"] == ["inspect-event-2"]
+    assert session["inspect_damage_state"]["table_preferences"]["expanded_versions"] == [
+        "P1::V1"
+    ]
+    assert session["inspect_damage_state"]["table_preferences"]["sort_field"] == "work_order"
+
+
+def test_get_events_rejects_program_scope_in_global_filters(
+    test_database, test_cache, test_settings
+) -> None:
+    query_service = QueryService(test_database, test_cache, test_settings)
+    test_database.insert_event(
+        event_id="scope-key-regression",
+        program_id="P1",
+        version="V1",
+        status="Pending",
+    )
+
+    with pytest.raises(UnknownFilterFieldError):
+        query_service.get_events(global_filters={"program_id": ["P1"]})

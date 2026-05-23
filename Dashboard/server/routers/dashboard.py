@@ -34,6 +34,7 @@ from server.models.dashboard import (
     EventMetadataUpdateRequest,
     EventsRequest,
     EventsResponse,
+    EventsByIdsRequest,
     FilterOptionsUpdateRequest,
     MetadataResponse,
     PlotDataRequest,
@@ -56,10 +57,52 @@ from server.models.dashboard import (
     VersionsResponse,
 )
 from server.services.plot_image import PlotImageService
+from server.services.query import OptimisticConcurrencyError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dashboard", dependencies=[Depends(get_current_user)])
+
+
+def _event_record_to_metadata(event: dict[str, Any]) -> EventMetadata:
+    return EventMetadata(
+        event_id=event["event_id"],
+        program_id=event["program_id"],
+        version=event["version"],
+        uploaded_by_user_id=event.get("uploaded_by_user_id"),
+        uploaded_by_username=event.get("uploaded_by_username"),
+        last_updated_by_user_id=event.get("last_updated_by_user_id"),
+        last_updated_by_username=event.get("last_updated_by_username"),
+        status=event.get("status"),
+        job_number=event.get("job_number"),
+        work_order=event.get("work_order"),
+        rfq=event.get("rfq"),
+        dv=event.get("dv"),
+        pv=event.get("pv"),
+        post_prod=event.get("post_prod"),
+        suspension_component=event.get("suspension_component"),
+        axle_location=event.get("axle_location"),
+        gvw=event.get("gvw"),
+        gross_vehicle_weight_range_lbs=event.get("gross_vehicle_weight_range_lbs"),
+        fgawr=event.get("fgawr"),
+        fgawr_range_lbs=event.get("fgawr_range_lbs"),
+        rgawr=event.get("rgawr"),
+        rgawr_range_lbs=event.get("rgawr_range_lbs"),
+        drive_type=event.get("drive_type"),
+        material_construction=event.get("material_construction"),
+        steering_position=event.get("steering_position"),
+        damper_type=event.get("damper_type"),
+        vehicle_type=event.get("vehicle_type"),
+        custom_fields=event.get("custom_fields") or {},
+        source_file=event.get("source_file"),
+        row_count=event.get("row_count"),
+        has_channel_map=bool(event.get("has_channel_map", True)),
+        missing_channel_map=bool(event.get("missing_channel_map", False)),
+        selectable_for_plotting=bool(event.get("selectable_for_plotting", True)),
+        created_at=str(event.get("created_at")) if event.get("created_at") else None,
+        updated_at=str(event.get("updated_at")) if event.get("updated_at") else None,
+    )
+
 
 @router.get("/program-ids", response_model=ProgramIdsResponse)
 async def get_program_ids(
@@ -296,6 +339,7 @@ async def list_custom_fields(
 async def create_or_update_custom_field(
     request: CustomFieldDefinitionRequest,
     custom_field_service: CustomFieldServiceDep,
+    query_service: QueryServiceDep,
     write_user: WriteUserDep,
 ) -> CustomFieldDefinitionResponse:
     """Create or update a custom field definition (write access required)."""
@@ -307,6 +351,7 @@ async def create_or_update_custom_field(
             is_filterable=request.is_filterable,
             created_by_user_id=write_user["id"],
         )
+        query_service.invalidate_filter_option_caches()
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -342,6 +387,7 @@ async def update_program_custom_field_values(
     program_id: str,
     request: ProgramCustomFieldValuesUpdateRequest,
     custom_field_service: CustomFieldServiceDep,
+    query_service: QueryServiceDep,
     _: WriteUserDep,
 ) -> ProgramCustomFieldValuesResponse:
     """Replace program-scoped custom field values for a field (write access required)."""
@@ -351,6 +397,7 @@ async def update_program_custom_field_values(
             program_id=program_id,
             values=request.values,
         )
+        query_service.invalidate_filter_option_caches()
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -374,56 +421,40 @@ async def get_events(
     Get events matching the global filters.
     """
     result = query_service.get_all_events(
+        program_ids=request.program_ids or None,
+        versions=request.versions or None,
         global_filters=request.global_filters,
         limit=limit,
         offset=offset,
     )
 
-    events_list = [
-        EventMetadata(
-            event_id=e["event_id"],
-            program_id=e["program_id"],
-            version=e["version"],
-            uploaded_by_user_id=e.get("uploaded_by_user_id"),
-            uploaded_by_username=e.get("uploaded_by_username"),
-            last_updated_by_user_id=e.get("last_updated_by_user_id"),
-            last_updated_by_username=e.get("last_updated_by_username"),
-            status=e.get("status"),
-            job_number=e.get("job_number"),
-            work_order=e.get("work_order"),
-            rfq=e.get("rfq"),
-            dv=e.get("dv"),
-            pv=e.get("pv"),
-            post_prod=e.get("post_prod"),
-            suspension_component=e.get("suspension_component"),
-            axle_location=e.get("axle_location"),
-            gvw=e.get("gvw"),
-            gross_vehicle_weight_range_lbs=e.get("gross_vehicle_weight_range_lbs"),
-            fgawr=e.get("fgawr"),
-            fgawr_range_lbs=e.get("fgawr_range_lbs"),
-            rgawr=e.get("rgawr"),
-            rgawr_range_lbs=e.get("rgawr_range_lbs"),
-            drive_type=e.get("drive_type"),
-            material_construction=e.get("material_construction"),
-            steering_position=e.get("steering_position"),
-            damper_type=e.get("damper_type"),
-            vehicle_type=e.get("vehicle_type"),
-            custom_fields=e.get("custom_fields") or {},
-            source_file=e.get("source_file"),
-            row_count=e.get("row_count"),
-            has_channel_map=bool(e.get("has_channel_map", True)),
-            missing_channel_map=bool(e.get("missing_channel_map", False)),
-            selectable_for_plotting=bool(e.get("selectable_for_plotting", True)),
-            created_at=str(e.get("created_at")) if e.get("created_at") else None,
-            updated_at=str(e.get("updated_at")) if e.get("updated_at") else None,
-        )
-        for e in result["events"]
-    ]
+    events_list = [_event_record_to_metadata(e) for e in result["events"]]
 
     return EventsResponse(
         events=events_list,
         total_count=result["total_count"],
         has_more=result["has_more"],
+    )
+
+
+@router.post("/events/by-ids", response_model=EventsResponse)
+async def get_events_by_ids(
+    request: EventsByIdsRequest,
+    query_service: QueryServiceDep,
+    settings: SettingsDep,
+) -> EventsResponse:
+    """Get event metadata for explicit event IDs (ignores global filters)."""
+    event_ids = request.event_ids
+    if len(event_ids) > settings.max_events_per_query:
+        event_ids = event_ids[: settings.max_events_per_query]
+
+    events = query_service.get_events_by_ids(event_ids)
+    events_list = [_event_record_to_metadata(e) for e in events]
+
+    return EventsResponse(
+        events=events_list,
+        total_count=len(events_list),
+        has_more=False,
     )
 
 
@@ -435,12 +466,13 @@ async def update_event_metadata(
     current_user: CurrentUserDep,
 ) -> EventMetadata:
     """Update editable metadata fields for a single event."""
-    updates = request.model_dump(exclude_unset=True)
+    updates = request.model_dump(exclude={"if_unmodified_since"}, exclude_unset=True)
     try:
         updated = query_service.update_event_metadata(
             event_id,
             updates=updates,
             current_user=current_user,
+            if_unmodified_since=request.if_unmodified_since,
         )
     except LookupError as exc:
         raise HTTPException(
@@ -450,6 +482,11 @@ async def update_event_metadata(
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+    except OptimisticConcurrencyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
 

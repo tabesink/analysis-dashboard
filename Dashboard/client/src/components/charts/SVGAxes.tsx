@@ -17,6 +17,19 @@ interface SVGAxesProps {
   labelFontSize?: number;
 }
 
+export const AXIS_TYPOGRAPHY = {
+  grid: {
+    tick: 8,
+    label: 8,
+  },
+  interactive: {
+    // Interactive view uses a larger viewport; use a scaled-up value
+    // to keep perceived label size aligned with grid cards.
+    tick: 16,
+    label: 16,
+  },
+} as const;
+
 /**
  * Renders axes, grid lines, and labels.
  * 
@@ -36,8 +49,8 @@ export function SVGAxes({
   height,
   padding,
   config,
-  tickFontSize = 8,
-  labelFontSize = 8,
+  tickFontSize = AXIS_TYPOGRAPHY.grid.tick,
+  labelFontSize = AXIS_TYPOGRAPHY.grid.label,
 }: SVGAxesProps) {
   const gridCount = config.gridCount ?? 5;
   const plotWidth = width - padding.left - padding.right;

@@ -35,8 +35,13 @@ lttb_reduction_factor: 0.4
 # Maximum number of events per dashboard query
 max_events_per_query: 200
 
-# Maximum upload size in MB (CSV uploads and database import ZIP; use 15000+ for large DB exports)
-max_upload_size_mb: 15000
+# Maximum upload size in MB (CSV uploads and database import ZIP; 61440 = 60 GiB)
+max_upload_size_mb: 61440
+
+# DuckDB tuning for load-data Parquet import (override via DUCKDB_IMPORT_* env vars)
+duckdb_import_memory_limit: "10GB"
+duckdb_import_threads: 1
+duckdb_live_memory_limit_during_import: "1GB"
 
 # =============================================================================
 # CORS Settings

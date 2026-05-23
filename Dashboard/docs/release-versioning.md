@@ -14,32 +14,35 @@ Mirrored metadata fields are kept in sync with the canonical version:
 
 ## Commands
 
-Set a new release version and synchronize metadata:
+For a full LAN release from the repository root:
+
+```bash
+./release.sh 1.2.3
+```
+
+That promotes `CHANGELOG.md` `[Unreleased]` notes, synchronizes metadata,
+builds the deployment bundle, and verifies the generated checksum.
+
+To only set a new Dashboard version and synchronize metadata:
+
+```bash
+./scripts/release_version.sh 1.2.3
+```
+
+Lower-level version commands remain available for troubleshooting:
 
 ```bash
 python3 scripts/release_version.py 1.2.3
-```
-
-Regenerate frontend version artifact after bump:
-
-```bash
 npm --prefix client run generate:version
-```
-
-Verify no drift between canonical and mirrored versions:
-
-```bash
 python3 scripts/check_version_sync.py
 ```
 
 ## Release Checklist
 
 1. Add user-facing changes under `## [Unreleased]` in `CHANGELOG.md`.
-2. Pick the next SemVer and run `python3 scripts/release_version.py <version>`.
-3. Run `npm --prefix client run generate:version`.
-4. Run `python3 scripts/check_version_sync.py`.
-5. Smoke check:
+2. Pick the next SemVer and run root `./release.sh <version>`.
+3. Confirm the command prints the two `Deployment/releases/` handoff files.
+4. Smoke check:
    - Frontend version label shows `client/server` in the header.
    - `GET /api/v1/info` returns the expected `server_version`.
-6. Move changelog notes from `Unreleased` to `## [<version>] - YYYY-MM-DD`.
-7. Create annotated git tag `v<version>` on the tested release commit.
+5. Create annotated git tag `v<version>` on the tested release commit.

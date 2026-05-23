@@ -1,9 +1,10 @@
 """Data ingestion service with atomic transaction semantics."""
 
-import logging
-import os
+import csv
 import hashlib
 import json
+import logging
+import os
 import threading
 import uuid
 from collections.abc import Callable
@@ -114,6 +115,70 @@ class IngestionService:
     def _preview_for_content(self, content: bytes) -> dict[str, Any]:
         text = content.decode("utf-8", errors="replace")
         return {"lines": text.splitlines()[:20]}
+
+    def _channel_map_with_dataframe_headers(
+        self,
+        channel_map: dict[str, dict[str, Any]],
+        dataframe: Any,
+    ) -> dict[str, dict[str, Any]]:
+        """Resolve channel-map names from parsed CSV/RSP headers."""
+        columns = [str(column) for column in dataframe.columns]
+        units = dataframe.attrs.get("units")
+        return self._channel_map_with_headers(
+            channel_map,
+            columns,
+            units if isinstance(units, list) else None,
+        )
+
+    def _channel_map_with_preview_headers(
+        self,
+        channel_map: dict[str, dict[str, Any]],
+        artifact: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        raw_preview = artifact.get("preview_json")
+        if not raw_preview:
+            return channel_map
+        try:
+            preview = json.loads(raw_preview) if isinstance(raw_preview, str) else raw_preview
+        except (TypeError, json.JSONDecodeError):
+            return channel_map
+        lines = preview.get("lines", []) if isinstance(preview, dict) else []
+        headers = self._metadata_row_from_preview(lines, "#TITLES")
+        units = self._metadata_row_from_preview(lines, "#UNITS")
+        if not headers:
+            return channel_map
+        return self._channel_map_with_headers(channel_map, headers, units)
+
+    def _metadata_row_from_preview(self, lines: Any, marker: str) -> list[str]:
+        if not isinstance(lines, list):
+            return []
+        for index, line in enumerate(lines[:-1]):
+            if str(line).strip() == marker:
+                return next(csv.reader([str(lines[index + 1])]))
+        return []
+
+    def _channel_map_with_headers(
+        self,
+        channel_map: dict[str, dict[str, Any]],
+        headers: list[str],
+        units: list[str] | None,
+    ) -> dict[str, dict[str, Any]]:
+        resolved: dict[str, dict[str, Any]] = {}
+        for plot_key, mapping in channel_map.items():
+            next_mapping = dict(mapping)
+            x_col = int(next_mapping.get("x_col", 0))
+            y_col = int(next_mapping.get("y_col", 1))
+            if x_col < len(headers):
+                next_mapping["x_channel"] = headers[x_col]
+            if y_col < len(headers):
+                next_mapping["y_channel"] = headers[y_col]
+            if units is not None:
+                if x_col < len(units):
+                    next_mapping["x_unit"] = units[x_col] or None
+                if y_col < len(units):
+                    next_mapping["y_unit"] = units[y_col] or None
+            resolved[plot_key] = next_mapping
+        return resolved
 
     def _store_artifact(
         self,
@@ -366,6 +431,10 @@ class IngestionService:
 
         if not parsed_files:
             return IngestionResult(success=False, error="No valid CSV or RSP files found")
+        channel_map = self._channel_map_with_dataframe_headers(
+            channel_map,
+            parsed_files[0][0].dataframe,
+        )
 
         # Phase 2: Write data with per-event commits
         created_events: list[str] = []
@@ -450,7 +519,8 @@ class IngestionService:
                         )
 
                         df_long = self.transformer.transform_to_long(
-                            parsed.dataframe, channel_map
+                            parsed.dataframe,
+                            channel_map,
                         )
                         if not df_long.empty:
                             df_long["event_id"] = event_id
@@ -645,6 +715,7 @@ class IngestionService:
             raise ValueError("No retained CSV artifacts are available for this program/version")
         column_count = int(preview_artifact.get("column_count") or 0)
         channel_map = self.validate_fixed_channel_map(entries, column_count)
+        channel_map = self._channel_map_with_preview_headers(channel_map, preview_artifact)
 
         with self.db.write_connection() as conn:
             for plot_key, mapping in channel_map.items():
@@ -676,8 +747,8 @@ class IngestionService:
                         mapping["plot_order"],
                         1.0,
                         1.0,
-                        None,
-                        None,
+                        mapping.get("x_unit"),
+                        mapping.get("y_unit"),
                     ],
                 )
 
@@ -733,7 +804,10 @@ class IngestionService:
                         conn=conn,
                     )
 
-                    df_long = self.transformer.transform_to_long(parsed.dataframe, channel_map)
+                    df_long = self.transformer.transform_to_long(
+                        parsed.dataframe,
+                        channel_map,
+                    )
                     if not df_long.empty:
                         df_long["event_id"] = event_id
                         conn.execute("""

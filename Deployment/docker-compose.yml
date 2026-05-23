@@ -1,8 +1,9 @@
-# RSP Dashboard - LAN production stack (plain HTTP, no reverse proxy).
+# RSP Dashboard - LAN production stack (plain HTTP, single reverse proxy).
 #
 # Topology:
-#     browser (LAN) -> client:3000 (Next.js, host port 3000)
-#                   -> server:8000 (FastAPI,  host port 8000)
+#     browser (LAN) -> proxy:8080 (host DASHBOARD_PORT)
+#                   -> /api/* and /health* -> server:8000
+#                   -> everything else     -> client:3000
 #     jwt-init (one-shot) generates JWT_SECRET into a named volume on first up.
 #
 # Operator workflow on the prod host:
@@ -17,7 +18,7 @@
 #
 # This stack is for trusted internal LAN deployments. It serves plain HTTP and
 # sets `ALLOW_INSECURE_COOKIES=true` so the server's production-mode validator
-# permits non-`Secure` cookies. Do NOT expose these ports to the public
+# permits non-`Secure` cookies. Do NOT expose this port to the public
 # internet without putting an HTTPS-terminating reverse proxy in front.
 
 name: rsp-dashboard
@@ -36,12 +37,47 @@ x-security-baseline: &security-baseline
 
 services:
   # ---------------------------------------------------------------------
+  # Single LAN entrypoint. Plain HTTP only; keep this behind the trusted LAN.
+  # ---------------------------------------------------------------------
+  proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    user: "101:101"
+    ports:
+      - "${DASHBOARD_PORT:-3000}:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      server:
+        condition: service_healthy
+      client:
+        condition: service_healthy
+    <<: *security-baseline
+    tmpfs:
+      - /tmp:size=32M,mode=1777
+      - /var/cache/nginx:size=32M,mode=1777,uid=101,gid=101
+      - /var/run:size=16M,mode=1777,uid=101,gid=101
+    pids_limit: 100
+    cpus: 0.5
+    mem_limit: 128m
+    mem_reservation: 64m
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *default-logging
+    labels:
+      service: proxy
+      env: production
+
+  # ---------------------------------------------------------------------
   # One-shot init: generate JWT_SECRET on first up. Idempotent across
   # restarts because the secret is persisted in a named volume.
   # ---------------------------------------------------------------------
   jwt-init:
     image: alpine:3.20
-    container_name: dashboard-jwt-init
     restart: "no"
     user: "0:0"
     volumes:
@@ -74,11 +110,8 @@ services:
   # ---------------------------------------------------------------------
   server:
     image: rsp-dashboard-server:${IMAGE_TAG:-1.1.0}
-    container_name: dashboard-server
     restart: unless-stopped
     user: "1001:1001"
-    ports:
-      - "${SERVER_PORT:-8000}:8000"
     volumes:
       - data:/app/data
       - logs:/app/logs
@@ -93,6 +126,10 @@ services:
       - LOG_DIR=/app/logs
       - LOG_TO_FILE=true
       - SLOW_QUERY_MS=${SLOW_QUERY_MS:-1000}
+      # Matplotlib defaults to /app/.config, which is read-only in this stack.
+      - MPLCONFIGDIR=/tmp/matplotlib
+      # Large Parquet ZIP upload/validate/import uses data_root/tmp, not the small /tmp tmpfs.
+      - TMPDIR=/app/data/tmp
       # LAN opt-in: lets the server skip the AUTH_COOKIE_SECURE / CORS
       # wildcard prod-mode validators. Required because we serve plain HTTP.
       - ALLOW_INSECURE_COOKIES=true
@@ -118,14 +155,15 @@ services:
       - /tmp:size=128M,mode=1777
     pids_limit: 512
     cpus: 4
-    mem_limit: 8g
+    mem_limit: 12g
     mem_reservation: 2g
     healthcheck:
+      # Liveness only — readiness probes DuckDB and can block during large imports.
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready').status==200 else 1)"
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live').status==200 else 1)"
       interval: 30s
       timeout: 10s
       retries: 3
@@ -140,19 +178,16 @@ services:
   # ---------------------------------------------------------------------
   client:
     image: rsp-dashboard-client:${IMAGE_TAG:-1.1.0}
-    container_name: dashboard-client
     restart: unless-stopped
     user: "1001:1001"
-    ports:
-      - "${CLIENT_PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
       - NEXT_TELEMETRY_DISABLED=1
       - PORT=3000
       - HOSTNAME=0.0.0.0
-      # NEXT_PUBLIC_API_URL is intentionally unset. The client's
-      # `resolveApiBase()` falls back to `${window.location.protocol}//${window.location.hostname}:${SERVER_PORT}`
-      # at runtime, so a single image works on any LAN host.
+      - NEXT_PUBLIC_API_MODE=same-origin
+      # The release image is built with same-origin API mode so browser calls
+      # use `/api/...` through the proxy instead of direct server host ports.
     depends_on:
       server:
         condition: service_healthy
@@ -165,7 +200,7 @@ services:
     mem_limit: 512m
     mem_reservation: 256m
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/"]
       interval: 30s
       timeout: 5s
       retries: 3

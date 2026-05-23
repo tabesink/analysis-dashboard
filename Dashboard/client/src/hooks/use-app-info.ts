@@ -27,6 +27,16 @@ export interface AppInfo {
   clientMinVersion: string;
   /** Whether client meets minimum version requirement */
   isCompatible: boolean;
+  /** Runtime mode reported by the server */
+  appEnv: string;
+  /** Database connectivity status reported by the server */
+  databaseStatus: string;
+  /** Schema version currently recorded in the database */
+  databaseSchemaVersion: number | null;
+  /** Schema version expected by this application build */
+  databaseSchemaTargetVersion: number;
+  /** Whether the database schema differs from the application target */
+  databaseSchemaNeedsMigration: boolean;
 }
 
 /**
@@ -55,6 +65,11 @@ function transformResponse(serverInfo: InfoResponse): AppInfo {
     apiVersion: serverInfo.api_version,
     clientMinVersion: serverInfo.client_min_version,
     isCompatible: isVersionCompatible(clientVersion, serverInfo.client_min_version),
+    appEnv: serverInfo.app_env,
+    databaseStatus: serverInfo.database_status,
+    databaseSchemaVersion: serverInfo.database_schema_version,
+    databaseSchemaTargetVersion: serverInfo.database_schema_target_version,
+    databaseSchemaNeedsMigration: serverInfo.database_schema_needs_migration,
   };
 }
 
