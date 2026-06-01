@@ -46,6 +46,8 @@ import {
   buildDamageResultCacheKey,
   useInspectDamageResultsStore,
 } from '@/stores/inspect-damage-results-store';
+import { DamagePlotSidePanel } from '@/features/inspect-damage-3d/components/DamagePlotSidePanel';
+import { buildInspectDamagePlotRows } from '@/features/inspect-damage-3d/lib/build-inspect-damage-plot-rows';
 import { damageApi } from '@/lib/api';
 import {
   getDefaultColumnFilters,
@@ -127,6 +129,10 @@ export default function InspectDamagePage() {
     }
     return map;
   }, [damageResponse]);
+  const damagePlotRows = useMemo(
+    () => buildInspectDamagePlotRows({ selectedEvents, damageRowsByEventId }),
+    [damageRowsByEventId, selectedEvents],
+  );
   const channelMetadata = useMemo(() => {
     const map = new Map<string, DamageInspectResponse['channels'][number]>();
     for (const channel of damageResponse?.channels ?? []) {
@@ -277,7 +283,7 @@ export default function InspectDamagePage() {
         </SidePanelLayout>
 
         <div className="flex-1 min-w-0 min-h-0">
-          <Card className="h-full rounded-r-lg rounded-l-none flex flex-col gap-0 overflow-hidden shadow-subtle border py-0">
+          <Card className="h-full rounded-none flex flex-col gap-0 overflow-hidden shadow-subtle border-y border-l py-0">
             <DamageTable
               events={selectedEvents}
               damageRowsByEventId={damageRowsByEventId}
@@ -287,6 +293,7 @@ export default function InspectDamagePage() {
             />
           </Card>
         </div>
+        <DamagePlotSidePanel rows={damagePlotRows} />
       </div>
     </div>
   );
@@ -861,7 +868,7 @@ function DamageTable({
                 type="button"
                 variant="outline"
                 aria-label="Column visibility"
-                className="min-w-[5.75rem] justify-center"
+                className="min-w-23 justify-center"
               >
                 <Columns className="size-4" />
                 Cols

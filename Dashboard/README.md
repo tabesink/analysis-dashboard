@@ -18,6 +18,12 @@ server on `127.0.0.1:3001` (falling back to `3002` if needed).
 ./scripts/start-server-lan.sh
 ```
 
+Windows (PowerShell):
+
+```powershell
+.\scripts\start-server-lan.ps1
+```
+
 This non-container script builds the frontend, starts the backend on
 `0.0.0.0:8000`, and derives CORS origins for `localhost`, `127.0.0.1`, and the
 current machine hostname. Use this for quick internal testing, not as the

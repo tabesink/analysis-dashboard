@@ -13,7 +13,7 @@ debug: true
 log_level: "INFO"
 
 # Security (override via environment variables for real deployments)
-admin_secret: "dev-admin-password-change-me"
+admin_secret: "admin123"
 jwt_secret: "dev-jwt-secret-change-me"
 jwt_algorithm: "HS256"
 jwt_expiry_hours: 24

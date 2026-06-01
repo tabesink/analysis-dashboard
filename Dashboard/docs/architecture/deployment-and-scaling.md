@@ -89,7 +89,7 @@ Until then, scale **vertically** (CPU, RAM, NVMe) and keep one server container 
 | Mode | Entry | API bind | Notes |
 |------|-------|----------|-------|
 | Local dev | `./scripts/start-local-dev.sh` | `127.0.0.1:8000` | Next.js dev server on 3001/3002 |
-| LAN smoke | `./scripts/start-server-lan.sh` | `0.0.0.0:8000` | Non-container quick internal test |
-| Production | `Deployment/deploy.sh` | Behind proxy :3000 | Versioned images, env-primary secrets |
+| LAN smoke | `./scripts/start-server-lan.sh` or `.\scripts\start-server-lan.ps1` | `0.0.0.0:8000` | Non-container quick internal test |
+| Production | `Deployment/deploy.sh` or `Deployment/scripts/deploy.ps1` | Behind proxy :3000 | Versioned images, env-primary secrets |
 
 `server/settings.yaml` is a **development template**. Production secrets and machine-specific values come from environment variables / deployment `.env`.

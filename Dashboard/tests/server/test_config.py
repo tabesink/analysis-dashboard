@@ -52,6 +52,26 @@ def test_deployment_environment_values_override_yaml(
     assert settings.cors_origins == ["http://dashbox:3001"]
 
 
+def test_cors_origins_from_dotenv_file(tmp_path: Path, monkeypatch) -> None:
+    settings_yaml = tmp_path / "settings.yaml"
+    settings_yaml.write_text('app_env: "development"\n', encoding="utf-8")
+
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(
+        "CORS_ORIGINS=http://localhost:3001,http://127.0.0.1:3001\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("server.config._dotenv_path", lambda: dotenv_path)
+
+    settings = create_settings_from_yaml(settings_yaml)
+
+    assert settings.cors_origins == [
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
+
+
 def test_cors_origins_normalize_hostname_case(tmp_path: Path, monkeypatch) -> None:
     settings_yaml = tmp_path / "settings.yaml"
     settings_yaml.write_text('app_env: "development"\n', encoding="utf-8")

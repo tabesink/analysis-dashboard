@@ -56,6 +56,60 @@ def _normalize_cors_origin(origin: str) -> str:
     )
 
 
+def _dotenv_path() -> Path:
+    """Dashboard repo .env (parent of server/)."""
+    return Path(__file__).parent.parent / ".env"
+
+
+def _read_dotenv_value(key: str) -> str | None:
+    env_path = _dotenv_path()
+    if not env_path.exists():
+        return None
+
+    target = key.lower()
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, _, value = stripped.partition("=")
+        if name.strip().lower() == target:
+            return value.strip()
+    return None
+
+
+def _load_dotenv_into_environ(*, skip_keys: frozenset[str]) -> None:
+    """Load .env into os.environ without letting pydantic JSON-parse list fields."""
+    env_path = _dotenv_path()
+    if not env_path.exists():
+        return
+
+    skip = {key.lower() for key in skip_keys}
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, _, value = stripped.partition("=")
+        key = name.strip()
+        if key.lower() in skip or key in os.environ:
+            continue
+        os.environ[key] = value.strip()
+
+
+def _parse_cors_origins(raw_value: str) -> list[str]:
+    value = raw_value.strip()
+    parsed: list[str] | None = None
+    if value.startswith("["):
+        try:
+            loaded = json.loads(value)
+            if isinstance(loaded, list):
+                parsed = [str(item) for item in loaded]
+        except json.JSONDecodeError:
+            parsed = None
+    if parsed is None:
+        parsed = [item.strip() for item in value.split(",") if item.strip()]
+    return [_normalize_cors_origin(origin) for origin in parsed]
+
+
 class RateLimitingSettings(BaseSettings):
     """Rate limiting configuration."""
 
@@ -238,6 +292,8 @@ def create_settings_from_yaml(yaml_path: Path | None = None) -> Settings:
 
     Priority: Environment Variables > .env > settings.yaml > Defaults
     """
+    _load_dotenv_into_environ(skip_keys=frozenset({"CORS_ORIGINS"}))
+
     if yaml_path is None:
         # Allow explicit settings file selection for non-container deployments.
         env_settings_path = os.getenv("SETTINGS_YAML_PATH")
@@ -323,6 +379,8 @@ def create_settings_from_yaml(yaml_path: Path | None = None) -> Settings:
     # before merging with init kwargs, and a bare value like '*' raises a
     # JSONDecodeError - even though our init kwarg would have won the merge.
     cors_env = os.environ.pop("CORS_ORIGINS", None)
+    if cors_env is None:
+        cors_env = _read_dotenv_value("CORS_ORIGINS")
     cors_indexed = sorted(
         (int(key.split("__", 1)[1]), value)
         for key, value in list(os.environ.items())
@@ -334,22 +392,14 @@ def create_settings_from_yaml(yaml_path: Path | None = None) -> Settings:
         os.environ.pop(key, None)
 
     if cors_env is not None:
-        cors_env = cors_env.strip()
-        parsed: list[str] | None = None
-        if cors_env.startswith("["):
-            try:
-                loaded = json.loads(cors_env)
-                if isinstance(loaded, list):
-                    parsed = [str(item) for item in loaded]
-            except json.JSONDecodeError:
-                parsed = None
-        if parsed is None:
-            parsed = [item.strip() for item in cors_env.split(",") if item.strip()]
+        parsed = _parse_cors_origins(cors_env)
         if parsed:
             yaml_config["cors_origins"] = parsed
     elif cors_indexed:
-        yaml_config["cors_origins"] = [value for _, value in cors_indexed]
-    if "cors_origins" in yaml_config:
+        yaml_config["cors_origins"] = [
+            _normalize_cors_origin(value) for _, value in cors_indexed
+        ]
+    elif "cors_origins" in yaml_config:
         yaml_config["cors_origins"] = [
             _normalize_cors_origin(origin) for origin in yaml_config["cors_origins"]
         ]
@@ -364,11 +414,13 @@ def create_settings_from_yaml(yaml_path: Path | None = None) -> Settings:
     caching = CachingSettings(**caching_config)
     validation = ValidationSettings(**validation_config)
 
-    # Create main settings with YAML as base
+    # Create main settings with YAML as base. .env is loaded manually above so
+    # pydantic does not JSON-decode comma-separated list fields like CORS_ORIGINS.
     return Settings(
         rate_limiting=rate_limiting,
         caching=caching,
         validation=validation,
+        _env_file=None,
         **yaml_config,
     )
 
