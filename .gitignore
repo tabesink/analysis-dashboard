@@ -45,6 +45,9 @@ out/
 .DS_Store
 Thumbs.db
 
+# Deployment
+Deployment/releases/
+
 # Prompts and references (if these are personal/local)
 .prompts/
 .references/
