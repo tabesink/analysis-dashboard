@@ -530,7 +530,7 @@ async def update_event_metadata(
 async def update_program_version_metadata(
     request: ProgramVersionMetadataUpdateRequest,
     query_service: QueryServiceDep,
-    current_user: CurrentUserDep,
+    write_user: WriteUserDep,
 ) -> ProgramVersionMetadataUpdateResponse:
     """Update editable metadata fields for all events in a program/version."""
     updates = request.updates.model_dump(exclude_unset=True)
@@ -539,7 +539,7 @@ async def update_program_version_metadata(
             program_id=request.program_id,
             version=request.version,
             updates=updates,
-            current_user=current_user,
+            current_user=write_user,
         )
     except LookupError as exc:
         raise HTTPException(

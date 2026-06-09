@@ -1034,3 +1034,15 @@ Self-registration via `POST /auth/register` creates a `role=user, can_write=FALS
 - Infer damage channels from every distinct raw channel name -- rejected because Inspect Damage should use the fixed 12-channel map, not every stored channel.
 
 **Key files:** `server/services/damage_channels.py`, `server/services/query.py`, `server/services/ingestion.py`, `server/storage/data_backfills.py`, `server/schema.yaml`, `client/src/app/inspect-damage/page.tsx`.
+
+---
+
+## DEC-067: Program-version metadata PUT requires write permission (2026-06-08)
+
+**Context:** Phase 12 (P12-03) intended `require_write_or_admin` on program-version metadata mutations, but `PUT /api/v1/dashboard/program-version/metadata` still depended on `CurrentUserDep`. Read-only users blocked by the `/database/edit` route guard could update metadata via direct API calls. Channel-map save already used `WriteUserDep`.
+
+**Decision:** Switch `update_program_version_metadata` to `WriteUserDep`. Service-layer ownership checks (`uploaded_by_user_id`, admin-only `status`) remain unchanged.
+
+**Rationale:** Aligns the batch metadata endpoint with other write surfaces and closes the bypass without changing request/response contracts.
+
+**Key files:** `server/routers/dashboard.py`, `tests/server/routers/test_dashboard_router.py`.

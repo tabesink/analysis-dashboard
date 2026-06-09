@@ -3,6 +3,9 @@
 
 ## [Unreleased]
 
+### Security
+- Program-version metadata updates (`PUT /api/v1/dashboard/program-version/metadata`) now require write permission; read-only users can no longer bypass the edit-page route guard via direct API calls.
+
 ### Added
 - Inspect Damage calculates per-event fatigue damage for the 12 canonical channels derived from the existing plot channel map.
 
