@@ -13,6 +13,7 @@ import {
   RotateCcw,
   RotateCw,
   Save,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -30,9 +31,9 @@ import { selectCanWrite, useAuthStore } from '@/stores/auth-store';
 import { useFilterOptions } from '@/hooks/use-filter-options';
 import type { ChannelMapEditorEntry, EventMetadata, FilterOptions } from '@/types/api';
 import { dashboardApi } from '@/lib/api';
-import { invalidateQueriesAfterMetadataSave } from '@/lib/metadata-save-cache';
 import { getPlotDisplayTitle } from '@/config/constants';
-import { EditMetadataSidePanel } from '@/components/edit-metadata';
+import { SidePanelLayout } from '@/components/shared';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 type MetadataDraftValues = Record<string, string>;
 type PhaseDraftValues = {
@@ -599,7 +600,12 @@ export default function FilterValuesPage() {
       setBaselinePhaseDraftValues(phaseDraftValues);
       setDirtyFields(new Set());
       setDirtyPhases(new Set());
-      await invalidateQueriesAfterMetadataSave(queryClient);
+      await queryClient.invalidateQueries({ queryKey: ['program-version-events'] });
+      await queryClient.invalidateQueries({ queryKey: ['datasets'] });
+      await queryClient.invalidateQueries({ queryKey: ['event-catalog'] });
+      await queryClient.invalidateQueries({ queryKey: ['all-events'] });
+      await queryClient.invalidateQueries({ queryKey: ['versions'] });
+      await queryClient.invalidateQueries({ queryKey: ['program-ids'] });
       toast.success(
         `Metadata saved for ${updatedEventCount} event${
           updatedEventCount === 1 ? '' : 's'
@@ -828,36 +834,117 @@ export default function FilterValuesPage() {
   return (
     <div className="flex-1 p-4 min-h-[calc(100vh-3.5rem)]">
       <div className="flex gap-0 h-[calc(100vh-7rem)]">
-        <EditMetadataSidePanel
+        <SidePanelLayout
           isCollapsed={sidePanelCollapsed}
           onToggleCollapse={() => setSidePanelCollapsed((prev) => !prev)}
-          selectDatasetProps={{
-            selectedProgramId,
-            selectedVersion,
-            programIds,
-            versions,
-            isProgramIdsLoading,
-            isVersionsLoading,
-            isPrefillLoading,
-            isSaving,
-            selectedEventMetadata,
-            formatTimestamp,
-            onProgramIdChange: (value) => {
-              setSelectedProgramId(value);
-              setSelectedVersion('');
-              setSelectedEventMetadata(null);
-            },
-            onVersionChange: (value) => {
-              setSelectedVersion(value);
-              setSelectedEventMetadata(null);
-            },
-            onClearFields: handleClearFields,
-          }}
-          uploadScheduleProps={{
-            enabled: Boolean(selectedProgramId && selectedVersion),
-            selectionKey: `${selectedProgramId}:${selectedVersion}`,
-          }}
-        />
+          expandedWidth="w-[320px]"
+        >
+          <ScrollArea className="flex-1 min-h-0 w-full">
+            <div className="p-5 space-y-5">
+              <div>
+                <h2 className="text-base font-semibold tracking-tight">Select Dataset</h2>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Edit event metadata for the selected program/version.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-muted-foreground">Program ID</p>
+                  <Select
+                    value={selectedProgramId}
+                    onValueChange={(value) => {
+                      setSelectedProgramId(value);
+                      setSelectedVersion('');
+                      setSelectedEventMetadata(null);
+                    }}
+                    disabled={isProgramIdsLoading || isPrefillLoading || isSaving}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select program ID" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {programIds.map((programId) => (
+                        <SelectItem key={programId} value={programId}>
+                          {programId}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-muted-foreground">Version</p>
+                  <Select
+                    value={selectedVersion}
+                    onValueChange={(value) => {
+                      setSelectedVersion(value);
+                      setSelectedEventMetadata(null);
+                    }}
+                    disabled={
+                      !selectedProgramId || isVersionsLoading || isPrefillLoading || isSaving
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select version" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {versions.map((version) => (
+                        <SelectItem key={version} value={version}>
+                          {version}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="rounded-md border bg-muted/20 p-3 text-xs">
+                <p className="font-medium text-foreground">Current Selection Summary</p>
+                <div className="mt-2 space-y-1 text-muted-foreground">
+                  <p>
+                    <span className="font-medium text-foreground">Last update by:</span>{' '}
+                    {selectedEventMetadata?.lastUpdatedBy ?? 'N/A'}
+                  </p>
+                  <p>
+                    <span className="font-medium text-foreground">Last update time:</span>{' '}
+                    {formatTimestamp(selectedEventMetadata?.lastUpdatedAt ?? null)}
+                  </p>
+                  <p>
+                    <span className="font-medium text-foreground">Uploaded by:</span>{' '}
+                    {selectedEventMetadata?.uploadedBy ?? 'N/A'}
+                  </p>
+                  <p>
+                    <span className="font-medium text-foreground">Uploaded time:</span>{' '}
+                    {formatTimestamp(selectedEventMetadata?.uploadedAt ?? null)}
+                  </p>
+                  <p>
+                    <span className="font-medium text-foreground">Status:</span>{' '}
+                    {selectedEventMetadata?.status ?? 'N/A'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex justify-center pt-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleClearFields}
+                  disabled={
+                    isPrefillLoading ||
+                    isSaving ||
+                    !selectedProgramId ||
+                    !selectedVersion
+                  }
+                  className="h-8 px-6 text-xs font-medium"
+                >
+                  <X className="h-3.5 w-3.5 mr-1.5" />
+                  Clear
+                </Button>
+              </div>
+            </div>
+          </ScrollArea>
+        </SidePanelLayout>
 
         <div className="flex-1 min-w-0 min-h-0">
           <Card className="h-full rounded-r-lg rounded-l-none flex flex-col gap-0 overflow-hidden shadow-subtle border py-0">
@@ -865,8 +952,7 @@ export default function FilterValuesPage() {
               <div className="shrink-0 flex items-center justify-between border-b px-4 py-3">
                 <TabsList className="w-fit">
                   <TabsTrigger value="filter-values">Edit Metadata</TabsTrigger>
-                  <TabsTrigger value="custom-fields">Assign Channels</TabsTrigger>
-                  <TabsTrigger value="durability-schedule">Durability Schedule</TabsTrigger>
+                  <TabsTrigger value="custom-fields">Map Channels</TabsTrigger>
                 </TabsList>
                 <div className="flex items-center gap-2">
                   <Button
@@ -1230,16 +1316,6 @@ export default function FilterValuesPage() {
                       </div>
                     </div>
                   )}
-                </CardContent>
-              </TabsContent>
-
-              <TabsContent value="durability-schedule" className="flex-1 min-h-0 mt-0">
-                <CardContent className="h-full min-h-0 p-4">
-                  {!selectedProgramId || !selectedVersion ? (
-                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                      Select a Program ID and Version to edit its durability schedule.
-                    </div>
-                  ) : null}
                 </CardContent>
               </TabsContent>
             </Tabs>

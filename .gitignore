@@ -45,9 +45,6 @@ out/
 .DS_Store
 Thumbs.db
 
-# Deployment
-Deployment/releases/
-
 # Prompts and references (if these are personal/local)
 .prompts/
 .references/
@@ -55,3 +52,4 @@ Deployment/releases/
 # Lock files (optional - you may want to keep uv.lock)
 # uv.lock
 
+Deployment/releases/

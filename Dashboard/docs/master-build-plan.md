@@ -358,19 +358,6 @@ Source: `docs/brainstorm/09_damage_inspection`, DEC-064.
 
 ---
 
-## Phase 16: Edit Metadata + Inspect Damage Refactor (IN PROGRESS)
-
-**Objective:** Decompose `/database/edit` and `/inspect-damage` god-pages into testable feature modules and close security/contract gaps before schedule-upload backend work.
-
-Source: `docs/brainstorm/12_schedule_upload_clientside/refactor-plan.md`.
-
-| Task ID | Task | Status | Key Files | Details |
-|---------|------|--------|-----------|---------|
-| REF-12-01 | Add `WriteUserDep` to metadata PUT + router test | DONE (2026-06-08) | `server/routers/dashboard.py`, `tests/server/routers/test_dashboard_router.py` | Closed auth gap: `PUT /program-version/metadata` now uses `require_write_or_admin` like channel-map save; router tests cover read-only 403 and write-user success. See DEC-067, `docs/tasks/REF-12-01.md`. |
-| REF-12-02 | Invalidate filter-options after metadata save | DONE (2026-06-08) | `client/src/lib/metadata-save-cache.ts`, `client/src/app/database/edit/page.tsx`, `client/src/lib/metadata-save-cache.test.ts` | Edit Metadata save now invalidates `filter-options` (M-07); shared helper centralizes all post-save query keys for reuse by REF-12-06. See `docs/tasks/REF-12-02.md`. |
-
----
-
 ## Known Issues (Backlog)
 
 Issues identified during codebase analysis, not yet assigned to a phase:

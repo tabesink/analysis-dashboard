@@ -1,11 +1,12 @@
 'use client';
 
-import { useMemo } from 'react';
+import { type DragEvent, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   FileText,
   Loader2,
   Trash2,
+  UploadCloud,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,7 +18,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { FileDropZone, SidePanelSection } from '@/components/shared';
+import { SidePanelSection } from '@/components/shared';
+import { cn } from '@/lib/utils';
 import type { FilterOptions } from '@/types/api';
 
 export interface UploadDataSectionProps {
@@ -87,6 +89,36 @@ export function UploadDataSection({
     uploadSummary.dataCount > 0 &&
     !uploadSummary.hasMixedDataTypes &&
     missingFieldsCount === 0;
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      onFilesChange(files);
+    }
+    e.target.value = '';
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    if (event.dataTransfer.types.includes('Files')) {
+      event.dataTransfer.dropEffect = 'copy';
+      setIsDraggingFiles(true);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setIsDraggingFiles(false);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    setIsDraggingFiles(false);
+    const files = Array.from(event.dataTransfer.files || []);
+    if (files.length > 0) {
+      onFilesChange(files);
+    }
+  };
 
   const hiddenFilterLabels = new Set([
     'RFQ',
@@ -131,14 +163,35 @@ export function UploadDataSection({
     >
       <div className="space-y-4">
         <div className="space-y-2">
-          <FileDropZone
-            inputId="database-upload-input"
-            accept=".csv,.rsp,.yaml,.yml"
+          <input
+            type="file"
             multiple
-            primaryLabel="Upload CSV/RSP files"
-            hint="channel_map.yml (optional)"
-            onFilesSelected={onFilesChange}
+            accept=".csv,.rsp,.yaml,.yml"
+            onChange={handleFileSelect}
+            className="hidden"
+            id="database-upload-input"
           />
+          <label
+            htmlFor="database-upload-input"
+            onDragOver={handleDragOver}
+            onDragEnter={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={cn(
+              'flex min-h-[180px] cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-card px-6 py-8 text-center transition-colors hover:bg-muted/40',
+              isDraggingFiles && 'border-foreground bg-muted/40',
+            )}
+          >
+            <span className="mb-5 flex size-11 items-center justify-center rounded-md text-foreground">
+              <UploadCloud className="size-9 stroke-[1.5]" />
+            </span>
+            <span className="text-sm font-medium text-foreground">
+              Upload CSV/RSP files 
+            </span>
+            <span className="mt-4 text-xs text-muted-foreground">
+              channel_map.yml (optional) 
+            </span>
+          </label>
 
           {selectedFiles.length > 0 && (
             <div className="space-y-1.5">
